@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # Pinned hdmf-zarr zarr-v3-migration commit (PR hdmf-dev/hdmf-zarr#325).
+  # Bump deliberately; the fixture cache keys off it.
+  HDMF_ZARR_SHA: d5de9267cf44c41986ba01a41f94d02956c40fcd
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -20,21 +25,42 @@ jobs:
           repository: catalystneuro/zarr-matlab
           path: zarr-matlab-dep
 
+      # ---- NWB fixture: deterministic given (hdmf-zarr SHA, generator) ----
+      - name: Cache NWB fixture
+        id: fixcache
+        uses: actions/cache@v4
+        with:
+          path: scratch/fixture.nwb.zarr
+          key: fixture-${{ env.HDMF_ZARR_SHA }}-${{ hashFiles('tools/make_nwb_fixture.py') }}
+
       - uses: actions/setup-python@v5
+        if: steps.fixcache.outputs.cache-hit != 'true'
         with:
           python-version: "3.12"
-      - name: Install hdmf-zarr (PR 325 branch, pinned) + pynwb
-        run: pip install "git+https://github.com/hdmf-dev/hdmf-zarr@zarr-v3-migration" pynwb
+          cache: pip
+          cache-dependency-path: .github/workflows/ci.yml
+      - name: Install hdmf-zarr (pinned) + pynwb and generate fixture
+        if: steps.fixcache.outputs.cache-hit != 'true'
+        run: |
+          pip install "git+https://github.com/hdmf-dev/hdmf-zarr@${HDMF_ZARR_SHA}" pynwb
+          python tools/make_nwb_fixture.py scratch/fixture.nwb.zarr
 
-      - name: Generate NWB-Zarr fixture
-        run: python tools/make_nwb_fixture.py scratch/fixture.nwb.zarr
+      # ---- zarr-matlab MEX: deterministic given (dep SHA, os) -------------
+      - name: Resolve zarr-matlab dep SHA
+        id: depsha
+        run: echo "sha=$(git -C zarr-matlab-dep rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Cache zarr-matlab MEX binaries
+        id: mexcache
+        uses: actions/cache@v4
+        with:
+          path: zarr-matlab-dep/+zarr/+internal/*.mex*
+          key: mex-${{ runner.os }}-${{ runner.arch }}-${{ steps.depsha.outputs.sha }}
 
-      # zstd MEX needed: NWB-Zarr uses zarr-python's default zstd compressor
       - name: Install compression libraries
-        if: runner.os == 'Linux'
+        if: steps.mexcache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libzstd-dev libblosc-dev
       - name: Install compression libraries (macOS)
-        if: runner.os == 'macOS'
+        if: steps.mexcache.outputs.cache-hit != 'true' && runner.os == 'macOS'
         run: brew install zstd c-blosc
 
       - uses: matlab-actions/setup-matlab@v2
@@ -42,6 +68,7 @@ jobs:
           cache: true
 
       - name: Build zarr-matlab MEX codecs
+        if: steps.mexcache.outputs.cache-hit != 'true'
         uses: matlab-actions/run-command@v2
         with:
           command: >-
