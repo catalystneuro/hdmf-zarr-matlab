@@ -22,10 +22,23 @@ backend) and [matzarr](https://github.com/catalystneuro/matzarr)'s translated
 
 ## Status
 
-**Planning.** See the shared plan in
+**Read and write layers implemented and CI-verified.**
+
+- **Read**: `resolve()` follows `zarr_link` entries through paths, `deref()`
+  handles attribute/JSON/struct reference forms, `derefAll()` dereferences
+  reference datasets, plus link listing and `.specloc` access — verified
+  against an NWB-Zarr fixture written by the pinned hdmf-zarr
+  `zarr-v3-migration` branch (pynwb `ElectricalSeries` with links,
+  attribute refs, dataset refs, and zstd-compressed data).
+- **Write**: `addLink()` / `writeRefs()` / `setRefAttr()` produce
+  spec-shaped conventions (object ids included, single links as JSON
+  lists, consolidated metadata refreshed) — validated in CI by a
+  zarr-python inspector, field by field against the storage spec.
+
+Next: hdmf-zarr reading MATLAB-modified NWB files end-to-end, and the
+MatNWB integration design. See
 [matzarr/PLAN.md](https://github.com/catalystneuro/matzarr/blob/main/PLAN.md)
-(milestones M3–M4). Interoperability with hdmf-zarr/pynwb will be verified
-bidirectionally in CI, following the zarr-matlab testing model.
+for the shared roadmap.
 
 ## License
 
