@@ -82,3 +82,16 @@ jobs:
             cd(getenv('GITHUB_WORKSPACE'));
             setenv('ZARR_MATLAB_PATH', fullfile(pwd, 'zarr-matlab-dep'));
             run tools/run_tests.m
+
+      - name: Write conventions fixture (MATLAB)
+        uses: matlab-actions/run-command@v2
+        with:
+          command: >-
+            cd(getenv('GITHUB_WORKSPACE'));
+            addpath(pwd, fullfile(pwd, 'tools'), fullfile(pwd, 'zarr-matlab-dep'));
+            make_write_fixture('write_fixture.zarr')
+
+      - name: Validate MATLAB-written conventions with zarr-python
+        run: |
+          pip install "zarr>=3" >/dev/null 2>&1 || pip install "zarr>=3"
+          python tools/validate_conventions.py write_fixture.zarr

@@ -109,6 +109,100 @@ classdef File < handle
             end
         end
 
+        % ------------------------------------------------------------------
+        % Write side (M4): create links and references per the conventions.
+
+        function addLink(obj, groupPath, name, target)
+            %ADDLINK Add a soft link: group's zarr_link gains an entry.
+            %   addLink(f, "analysis", "device", "general/devices/probe0")
+            g = obj.resolve(groupPath);
+            if ~isa(g, 'zarr.Group')
+                error("hdmf:WriteError", "'%s' is not a group.", groupPath);
+            end
+            entry = obj.makeRef(target);
+            entry.name = char(name);
+            a = g.attrs;
+            if isfield(a, 'zarr_link')
+                existing = a.zarr_link;
+                if isstruct(existing), existing = num2cell(existing); end
+            else
+                existing = {};
+            end
+            existing{end + 1} = entry;
+            % keep as a cell: jsonencode(cell) always emits a JSON list,
+            % even with one entry (a 1x1 struct array would emit an object)
+            g.setAttr('zarr_link', existing);
+            obj.refresh();
+        end
+
+        function z = writeRefs(obj, path, targets, opts)
+            %WRITEREFS Create a reference dataset (zarr_dtype:"object").
+            %   writeRefs(f, "table/col", ["a/b", "a/c"]) writes a string-dtype
+            %   array of JSON references, one per target path (or node).
+            arguments
+                obj
+                path (1,1) string
+                targets
+                opts.Attributes struct = struct()
+            end
+            n = numel(targets);
+            jsonRefs = strings(n, 1);
+            for i = 1:n
+                if iscell(targets)
+                    t = targets{i};
+                else
+                    t = targets(i);
+                end
+                jsonRefs(i) = string(jsonencode(obj.makeRef(t)));
+            end
+            attrs = opts.Attributes;
+            attrs.zarr_dtype = 'object';
+            z = zarr.create(obj.store, n, "string", Path=path, ...
+                Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attrs);
+            z(:) = jsonRefs;
+            obj.refresh();
+        end
+
+        function setRefAttr(obj, nodePath, attrName, target)
+            %SETREFATTR Store an object reference in an attribute
+            %   ({"zarr_dtype":"object","value":{...}} form).
+            node = obj.resolve(nodePath);
+            node.setAttr(attrName, struct( ...
+                'zarr_dtype', 'object', 'value', obj.makeRef(target)));
+            obj.refresh();
+        end
+
+        function ref = makeRef(obj, target)
+            %MAKEREF Build a {source, path, object ids} reference struct.
+            if isa(target, 'zarr.Group') || isa(target, 'zarr.Array')
+                node = target;
+            else
+                node = obj.resolve(target);
+            end
+            ref = struct('source', '.', 'path', char("/" + node.path));
+            a = node.attrs;
+            if isfield(a, 'object_id')
+                ref.object_id = char(a.object_id);
+            end
+            ra = obj.root.attrs;
+            if isfield(ra, 'object_id')
+                ref.source_object_id = char(ra.object_id);
+            end
+        end
+
+        function refresh(obj)
+            %REFRESH Re-read the root (and refresh consolidated metadata if
+            %   this store carries it) after mutations.
+            [bytes, found] = obj.store.get("zarr.json");
+            if found
+                txt = native2unicode(bytes, 'UTF-8');
+                if contains(txt, '"consolidated_metadata"')
+                    zarr.consolidate_metadata(obj.store);
+                end
+            end
+            obj.root = zarr.open(obj.store);
+        end
+
         function p = specLoc(obj)
             %SPECLOC Path of the cached specifications group ("" if absent).
             a = obj.root.attrs;
@@ -154,3 +248,4 @@ function f = x_specloc_field()
 % '.specloc' is not a valid struct field; jsondecode normalizes it.
 f = matlab.lang.makeValidName('.specloc');
 end
+
