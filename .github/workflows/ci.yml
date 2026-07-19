@@ -10,6 +10,7 @@ env:
   # Pinned hdmf-zarr zarr-v3-migration commit (PR hdmf-dev/hdmf-zarr#325).
   # Bump deliberately; the fixture cache keys off it.
   HDMF_ZARR_SHA: d5de9267cf44c41986ba01a41f94d02956c40fcd
+  ZARR_MATLAB_REF: v0.3.1
 
 jobs:
   test:
@@ -24,6 +25,7 @@ jobs:
         with:
           repository: catalystneuro/zarr-matlab
           path: zarr-matlab-dep
+          ref: ${{ env.ZARR_MATLAB_REF }}
 
       # ---- NWB fixture: deterministic given (hdmf-zarr SHA, generator) ----
       - name: Cache NWB fixture
@@ -93,5 +95,5 @@ jobs:
 
       - name: Validate MATLAB-written conventions with zarr-python
         run: |
-          pip install "zarr>=3" >/dev/null 2>&1 || pip install "zarr>=3"
+          pip install "zarr>=3,<4" >/dev/null 2>&1 || pip install "zarr>=3,<4"
           python tools/validate_conventions.py write_fixture.zarr

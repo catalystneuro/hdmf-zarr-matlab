@@ -51,48 +51,31 @@ classdef File < handle
             %LINKS zarr_link entries of a group, as a struct array
             %   (fields: name, source, path, and optionally object ids).
             g = obj.asNode(groupOrPath);
-            L = struct('name', {}, 'source', {}, 'path', {});
             a = g.attrs;
             if ~isfield(a, 'zarr_link')
+                L = hdmf.zarr.conventions.decodeLinks([]);
                 return
             end
-            raw = a.zarr_link;
-            if isstruct(raw)
-                entries = num2cell(raw);
-            else
-                entries = raw;
-            end
-            for i = 1:numel(entries)
-                e = entries{i};
-                L(i).name = string(char(e.name));
-                L(i).source = string(char(e.source));
-                L(i).path = string(char(e.path));
-            end
+            L = hdmf.zarr.conventions.decodeLinks(a.zarr_link);
         end
 
         function node = deref(obj, ref)
             %DEREF Resolve a reference (struct with source/path, a JSON
             %   string of one, or an attribute value of the
             %   {"zarr_dtype":"object","value":{...}} form) to its node.
-            if isstring(ref) || ischar(ref)
-                ref = jsondecode(char(ref));
-            end
-            if isfield(ref, 'zarr_dtype') && isfield(ref, 'value')
-                ref = ref.value;   % attribute form
-            end
-            src = string(char(ref.source));
+            ref = hdmf.zarr.conventions.decodeReference(ref);
+            src = ref.source;
             if src ~= "." && strlength(src) > 0
                 error("hdmf:UnsupportedFeature", ...
                     "External reference sources are not supported yet ('%s').", src);
             end
-            node = obj.resolve(string(char(ref.path)));
+            node = obj.resolve(ref.path);
         end
 
         function tf = isRefArray(~, node)
             %ISREFARRAY True if node is a zarr_dtype:"object" reference dataset.
-            tf = isa(node, 'zarr.Array') && isfield(node.attrs, 'zarr_dtype') && ...
-                string(char(node.attrs.zarr_dtype)) == "object" && ...
-                node.dtype == "string";
+            tf = isa(node, 'zarr.Array') && ...
+                hdmf.zarr.conventions.isReferenceArray(node.dtype, node.attrs);
         end
 
         function nodes = derefAll(obj, refArrayOrNode)
@@ -119,19 +102,21 @@ classdef File < handle
             if ~isa(g, 'zarr.Group')
                 error("hdmf:WriteError", "'%s' is not a group.", groupPath);
             end
-            entry = obj.makeRef(target);
-            entry.name = char(name);
+            reference = hdmf.zarr.conventions.decodeReference(obj.makeRef(target));
+            entry = struct( ...
+                'name', string(name), ...
+                'source', reference.source, ...
+                'path', reference.path, ...
+                'object_id', reference.object_id, ...
+                'source_object_id', reference.source_object_id);
             a = g.attrs;
             if isfield(a, 'zarr_link')
-                existing = a.zarr_link;
-                if isstruct(existing), existing = num2cell(existing); end
+                existing = hdmf.zarr.conventions.decodeLinks(a.zarr_link);
             else
-                existing = {};
+                existing = hdmf.zarr.conventions.decodeLinks([]);
             end
-            existing{end + 1} = entry;
-            % keep as a cell: jsonencode(cell) always emits a JSON list,
-            % even with one entry (a 1x1 struct array would emit an object)
-            g.setAttr('zarr_link', existing);
+            encodedLinks = hdmf.zarr.conventions.encodeLinks([existing, entry]);
+            g.setAttr('zarr_link', encodedLinks);
             obj.refresh();
         end
 
@@ -144,6 +129,8 @@ classdef File < handle
                 path (1,1) string
                 targets
                 opts.Attributes struct = struct()
+                opts.ChunkShape (1,:) double = []
+                opts.Codecs cell = {}
             end
             n = numel(targets);
             jsonRefs = strings(n, 1);
@@ -153,12 +140,13 @@ classdef File < handle
                 else
                     t = targets(i);
                 end
-                jsonRefs(i) = string(jsonencode(obj.makeRef(t)));
+                jsonRefs(i) = hdmf.zarr.conventions.encodeReference( ...
+                    obj.makeRef(t), Format="json");
             end
             attrs = opts.Attributes;
             attrs.zarr_dtype = 'object';
             z = zarr.create(obj.store, n, "string", Path=path, ...
-                Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attrs);
+                ChunkShape=opts.ChunkShape, Codecs=opts.Codecs, Attributes=attrs);
             z(:) = jsonRefs;
             obj.refresh();
         end
@@ -167,8 +155,9 @@ classdef File < handle
             %SETREFATTR Store an object reference in an attribute
             %   ({"zarr_dtype":"object","value":{...}} form).
             node = obj.resolve(nodePath);
-            node.setAttr(attrName, struct( ...
-                'zarr_dtype', 'object', 'value', obj.makeRef(target)));
+            encodedReference = hdmf.zarr.conventions.encodeReference( ...
+                obj.makeRef(target), Format="attribute");
+            node.setAttr(attrName, encodedReference);
             obj.refresh();
         end
 
@@ -188,29 +177,29 @@ classdef File < handle
             if isfield(ra, 'object_id')
                 ref.source_object_id = char(ra.object_id);
             end
+            ref = hdmf.zarr.conventions.encodeReference(ref);
         end
 
         function refresh(obj)
             %REFRESH Re-read the root (and refresh consolidated metadata if
             %   this store carries it) after mutations.
-            [bytes, found] = obj.store.get("zarr.json");
-            if found
-                txt = native2unicode(bytes, 'UTF-8');
-                if contains(txt, '"consolidated_metadata"')
-                    zarr.consolidate_metadata(obj.store);
-                end
-            end
+            hdmf.zarr.conventions.refreshConsolidatedMetadata(obj.store);
             obj.root = zarr.open(obj.store);
         end
 
         function p = specLoc(obj)
             %SPECLOC Path of the cached specifications group ("" if absent).
-            a = obj.root.attrs;
-            if isfield(a, x_specloc_field())
-                p = string(char(a.(x_specloc_field())));
-            else
-                p = "";
+            p = hdmf.zarr.conventions.readSpecLocation(obj.store);
+        end
+
+        function setSpecLoc(obj, location)
+            %SETSPECLOC Set the path of the cached specifications group.
+            arguments
+                obj
+                location (1,1) string
             end
+            hdmf.zarr.conventions.writeSpecLocation(obj.store, location);
+            obj.root = zarr.open(obj.store);
         end
     end
 
@@ -243,9 +232,3 @@ classdef File < handle
         end
     end
 end
-
-function f = x_specloc_field()
-% '.specloc' is not a valid struct field; jsondecode normalizes it.
-f = matlab.lang.makeValidName('.specloc');
-end
-

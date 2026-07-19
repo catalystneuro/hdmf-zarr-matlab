@@ -16,12 +16,17 @@ def main(root):
     acq = g["acquisition"]
     links = acq.attrs["zarr_link"]
     assert isinstance(links, list), f"zarr_link is {type(links)}, not list"
+    assert len(links) == 2
     link = links[0]
     assert link["name"] == "device"
     assert link["source"] == "."
     assert link["path"] == "/general/devices/probe0"
     target = g[link["path"].lstrip("/")]
     assert target.attrs["neurodata_type"] == "Device"
+    external_link = links[1]
+    assert external_link["name"] == "external_data"
+    assert external_link["source"] == "../external.nwb.zarr"
+    assert external_link["path"] == "/acquisition/data"
 
     # reference dataset: string dtype, zarr_dtype attr, JSON elements
     refs = g["acquisition"]["ts"]["refs"]
@@ -34,7 +39,14 @@ def main(root):
     # attribute-form reference
     table = g["acquisition"]["ts"]["data"].attrs["table"]
     assert table["zarr_dtype"] == "object"
+    assert table["value"]["source"] == "."
     assert table["value"]["path"] == "/general/devices/probe0"
+    assert table["value"]["object_id"] == "dev-oid-1"
+    assert table["value"]["source_object_id"] == "root-oid-1"
+
+    # cached specification location uses the exact HDMF key
+    assert g.attrs[".specloc"] == "/specifications"
+    assert "specifications" in g
 
     # consolidated metadata still valid after MATLAB writes
     assert g.metadata.consolidated_metadata is not None
