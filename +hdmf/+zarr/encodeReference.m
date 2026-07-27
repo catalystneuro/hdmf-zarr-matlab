@@ -1,6 +1,6 @@
 function encodedReference = encodeReference(reference, options)
 %ENCODEREFERENCE Encode an HDMF object-reference record.
-%   encoded = hdmf.zarr.conventions.encodeReference(reference) returns a
+%   encoded = hdmf.zarr.encodeReference(reference) returns a
 %   storage-shaped struct with source and path fields and optional object-id
 %   fields.
 %
@@ -16,7 +16,7 @@ function encodedReference = encodeReference(reference, options)
             ["record", "json", "attribute"])} = "record"
     end
 
-    reference = hdmf.zarr.conventions.decodeReference(reference);
+    reference = hdmf.zarr.decodeReference(reference);
     storageRecord = struct( ...
         "source", char(reference.source), ...
         "path", char(reference.path));

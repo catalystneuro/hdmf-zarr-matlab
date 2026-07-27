@@ -17,7 +17,7 @@ f.writeRefs("acquisition/ts/refs", ["general/devices/probe0", "acquisition/ts/da
 f.setRefAttr("acquisition/ts/data", "table", "general/devices/probe0");
 
 acquisition = f.resolve("acquisition");
-links = hdmf.zarr.conventions.decodeLinks(acquisition.attrs.zarr_link);
+links = hdmf.zarr.decodeLinks(acquisition.attrs.zarr_link);
 externalLink = struct( ...
     "name", "external_data", ...
     "source", "../external.nwb.zarr", ...
@@ -25,8 +25,8 @@ externalLink = struct( ...
     "object_id", "", ...
     "source_object_id", "");
 acquisition.setAttr("zarr_link", ...
-    hdmf.zarr.conventions.encodeLinks([links, externalLink]));
+    hdmf.zarr.encodeLinks([links, externalLink]));
 zarr.consolidate_metadata(store);
-hdmf.zarr.conventions.writeSpecLocation(store, "/specifications");
+hdmf.zarr.writeSpecLocation(store, "/specifications");
 fprintf('write fixture at %s\n', outDir);
 end

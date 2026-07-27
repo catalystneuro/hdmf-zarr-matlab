@@ -1,6 +1,6 @@
 function encodedLinks = encodeLinks(links, options)
 %ENCODELINKS Encode HDMF link records for the zarr_link attribute.
-%   encoded = hdmf.zarr.conventions.encodeLinks(links) returns a cell array
+%   encoded = hdmf.zarr.encodeLinks(links) returns a cell array
 %   so jsonencode emits a JSON list even when links contains one record.
 %
 %   encoded = encodeLinks(links, Format="json") returns that JSON list as
@@ -12,10 +12,10 @@ function encodedLinks = encodeLinks(links, options)
             ["attribute", "json"])} = "attribute"
     end
 
-    links = hdmf.zarr.conventions.decodeLinks(links);
+    links = hdmf.zarr.decodeLinks(links);
     storageLinks = cell(1, numel(links));
     for iLink = 1:numel(links)
-        reference = hdmf.zarr.conventions.encodeReference(links(iLink));
+        reference = hdmf.zarr.encodeReference(links(iLink));
         storageLink = struct( ...
             "name", char(links(iLink).name), ...
             "source", reference.source, ...

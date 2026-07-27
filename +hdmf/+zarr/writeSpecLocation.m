@@ -1,6 +1,6 @@
 function writeSpecLocation(store, location)
 %WRITESPECLOCATION Write the root .specloc attribute to a Zarr store.
-%   hdmf.zarr.conventions.writeSpecLocation(store, location) updates root
+%   hdmf.zarr.writeSpecLocation(store, location) updates root
 %   zarr.json directly so the HDMF key remains exactly ".specloc" rather
 %   than MATLAB's normalized struct field name.
 

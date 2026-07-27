@@ -20,12 +20,12 @@ These conventions serve two consumers: NWB-Zarr files (toward a MatNWB
 backend) and [matzarr](https://github.com/catalystneuro/matzarr)'s translated
 `.mat` cell-array references.
 
-## MATLAB conventions API
+## MATLAB API
 
-The `hdmf.zarr.conventions` package is the stable integration boundary for
-storage backends such as MatNWB. It operates on neutral MATLAB structs and raw
-Zarr metadata; consumers remain responsible for mapping records to their own
-domain objects.
+The `hdmf.zarr` namespace is the stable integration boundary for storage
+backends such as MatNWB. It operates on neutral MATLAB structs and raw Zarr
+metadata; consumers remain responsible for mapping records to their own domain
+objects.
 
 - `encodeReference` / `decodeReference` handle same-store and external object
   reference records, JSON array elements, and attribute wrappers.
@@ -40,8 +40,8 @@ domain objects.
 
 Region references are rejected explicitly because HDMF-Zarr does not yet
 define a complete interoperable storage representation for their selections.
-The higher-level `hdmf.zarr.File` facade delegates convention encoding and
-decoding to this package while continuing to provide node resolution helpers.
+The higher-level `hdmf.zarr.File` facade delegates encoding and decoding to
+these functions while continuing to provide node resolution helpers.
 
 The tested Zarr dependency is `catalystneuro/zarr-matlab` v0.3.1.
 

@@ -53,17 +53,17 @@ classdef File < handle
             g = obj.asNode(groupOrPath);
             a = g.attrs;
             if ~isfield(a, 'zarr_link')
-                L = hdmf.zarr.conventions.decodeLinks([]);
+                L = hdmf.zarr.decodeLinks([]);
                 return
             end
-            L = hdmf.zarr.conventions.decodeLinks(a.zarr_link);
+            L = hdmf.zarr.decodeLinks(a.zarr_link);
         end
 
         function node = deref(obj, ref)
             %DEREF Resolve a reference (struct with source/path, a JSON
             %   string of one, or an attribute value of the
             %   {"zarr_dtype":"object","value":{...}} form) to its node.
-            ref = hdmf.zarr.conventions.decodeReference(ref);
+            ref = hdmf.zarr.decodeReference(ref);
             src = ref.source;
             if src ~= "." && strlength(src) > 0
                 error("hdmf:UnsupportedFeature", ...
@@ -75,7 +75,7 @@ classdef File < handle
         function tf = isRefArray(~, node)
             %ISREFARRAY True if node is a zarr_dtype:"object" reference dataset.
             tf = isa(node, 'zarr.Array') && ...
-                hdmf.zarr.conventions.isReferenceArray(node.dtype, node.attrs);
+                hdmf.zarr.isReferenceArray(node.dtype, node.attrs);
         end
 
         function nodes = derefAll(obj, refArrayOrNode)
@@ -102,7 +102,7 @@ classdef File < handle
             if ~isa(g, 'zarr.Group')
                 error("hdmf:WriteError", "'%s' is not a group.", groupPath);
             end
-            reference = hdmf.zarr.conventions.decodeReference(obj.makeRef(target));
+            reference = hdmf.zarr.decodeReference(obj.makeRef(target));
             entry = struct( ...
                 'name', string(name), ...
                 'source', reference.source, ...
@@ -111,11 +111,11 @@ classdef File < handle
                 'source_object_id', reference.source_object_id);
             a = g.attrs;
             if isfield(a, 'zarr_link')
-                existing = hdmf.zarr.conventions.decodeLinks(a.zarr_link);
+                existing = hdmf.zarr.decodeLinks(a.zarr_link);
             else
-                existing = hdmf.zarr.conventions.decodeLinks([]);
+                existing = hdmf.zarr.decodeLinks([]);
             end
-            encodedLinks = hdmf.zarr.conventions.encodeLinks([existing, entry]);
+            encodedLinks = hdmf.zarr.encodeLinks([existing, entry]);
             g.setAttr('zarr_link', encodedLinks);
             obj.refresh();
         end
@@ -140,7 +140,7 @@ classdef File < handle
                 else
                     t = targets(i);
                 end
-                jsonRefs(i) = hdmf.zarr.conventions.encodeReference( ...
+                jsonRefs(i) = hdmf.zarr.encodeReference( ...
                     obj.makeRef(t), Format="json");
             end
             attrs = opts.Attributes;
@@ -155,7 +155,7 @@ classdef File < handle
             %SETREFATTR Store an object reference in an attribute
             %   ({"zarr_dtype":"object","value":{...}} form).
             node = obj.resolve(nodePath);
-            encodedReference = hdmf.zarr.conventions.encodeReference( ...
+            encodedReference = hdmf.zarr.encodeReference( ...
                 obj.makeRef(target), Format="attribute");
             node.setAttr(attrName, encodedReference);
             obj.refresh();
@@ -177,19 +177,19 @@ classdef File < handle
             if isfield(ra, 'object_id')
                 ref.source_object_id = char(ra.object_id);
             end
-            ref = hdmf.zarr.conventions.encodeReference(ref);
+            ref = hdmf.zarr.encodeReference(ref);
         end
 
         function refresh(obj)
             %REFRESH Re-read the root (and refresh consolidated metadata if
             %   this store carries it) after mutations.
-            hdmf.zarr.conventions.refreshConsolidatedMetadata(obj.store);
+            hdmf.zarr.refreshConsolidatedMetadata(obj.store);
             obj.root = zarr.open(obj.store);
         end
 
         function p = specLoc(obj)
             %SPECLOC Path of the cached specifications group ("" if absent).
-            p = hdmf.zarr.conventions.readSpecLocation(obj.store);
+            p = hdmf.zarr.readSpecLocation(obj.store);
         end
 
         function setSpecLoc(obj, location)
@@ -198,7 +198,7 @@ classdef File < handle
                 obj
                 location (1,1) string
             end
-            hdmf.zarr.conventions.writeSpecLocation(obj.store, location);
+            hdmf.zarr.writeSpecLocation(obj.store, location);
             obj.root = zarr.open(obj.store);
         end
     end

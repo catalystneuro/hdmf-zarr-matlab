@@ -9,14 +9,14 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "object_id", "device-id", ...
                 "source_object_id", "file-id");
 
-            record = hdmf.zarr.conventions.encodeReference(reference);
-            json = hdmf.zarr.conventions.encodeReference(reference, Format="json");
-            attribute = hdmf.zarr.conventions.encodeReference(reference, Format="attribute");
+            record = hdmf.zarr.encodeReference(reference);
+            json = hdmf.zarr.encodeReference(reference, Format="json");
+            attribute = hdmf.zarr.encodeReference(reference, Format="attribute");
 
-            expected = hdmf.zarr.conventions.decodeReference(reference);
-            testCase.verifyEqual(hdmf.zarr.conventions.decodeReference(record), expected);
-            testCase.verifyEqual(hdmf.zarr.conventions.decodeReference(json), expected);
-            testCase.verifyEqual(hdmf.zarr.conventions.decodeReference(attribute), expected);
+            expected = hdmf.zarr.decodeReference(reference);
+            testCase.verifyEqual(hdmf.zarr.decodeReference(record), expected);
+            testCase.verifyEqual(hdmf.zarr.decodeReference(json), expected);
+            testCase.verifyEqual(hdmf.zarr.decodeReference(attribute), expected);
         end
 
         function externalReferenceRemainsNeutral(testCase)
@@ -24,7 +24,7 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "source", "../external.nwb.zarr", ...
                 "path", "/acquisition/data");
 
-            decoded = hdmf.zarr.conventions.decodeReference(reference);
+            decoded = hdmf.zarr.decodeReference(reference);
 
             testCase.verifyEqual(decoded.source, "../external.nwb.zarr");
             testCase.verifyEqual(decoded.path, "/acquisition/data");
@@ -35,7 +35,7 @@ classdef TestConventionApi < matlab.unittest.TestCase
             reference = struct("path", "/acquisition/data");
 
             testCase.verifyError( ...
-                @() hdmf.zarr.conventions.decodeReference(reference), ...
+                @() hdmf.zarr.decodeReference(reference), ...
                 "hdmf:conventions:InvalidReference");
         end
 
@@ -45,7 +45,7 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "value", struct("source", ".", "path", "/acquisition/data"));
 
             testCase.verifyError( ...
-                @() hdmf.zarr.conventions.decodeReference(reference), ...
+                @() hdmf.zarr.decodeReference(reference), ...
                 "hdmf:conventions:UnsupportedRegionReference");
         end
 
@@ -55,9 +55,9 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "source", ".", ...
                 "path", "/general/devices/probe0");
 
-            attributeValue = hdmf.zarr.conventions.encodeLinks(link);
-            json = hdmf.zarr.conventions.encodeLinks(link, Format="json");
-            decoded = hdmf.zarr.conventions.decodeLinks(json);
+            attributeValue = hdmf.zarr.encodeLinks(link);
+            json = hdmf.zarr.encodeLinks(link, Format="json");
+            decoded = hdmf.zarr.decodeLinks(json);
 
             testCase.verifyClass(attributeValue, "cell");
             testCase.verifyNumElements(attributeValue, 1);
@@ -74,8 +74,8 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "object_id", "dataset-id", ...
                 "source_object_id", "external-file-id");
 
-            encoded = hdmf.zarr.conventions.encodeLinks(link);
-            decoded = hdmf.zarr.conventions.decodeLinks(encoded);
+            encoded = hdmf.zarr.encodeLinks(link);
+            decoded = hdmf.zarr.decodeLinks(encoded);
 
             testCase.verifyEqual(decoded.name, "external_data");
             testCase.verifyEqual(decoded.source, "../external.nwb.zarr");
@@ -87,48 +87,48 @@ classdef TestConventionApi < matlab.unittest.TestCase
             regionAttributes = struct("zarr_dtype", "region");
 
             testCase.verifyTrue( ...
-                hdmf.zarr.conventions.isReferenceArray("string", objectAttributes));
+                hdmf.zarr.isReferenceArray("string", objectAttributes));
             testCase.verifyFalse( ...
-                hdmf.zarr.conventions.isReferenceArray("float64", objectAttributes));
+                hdmf.zarr.isReferenceArray("float64", objectAttributes));
             testCase.verifyFalse( ...
-                hdmf.zarr.conventions.isReferenceArray("string", regionAttributes));
+                hdmf.zarr.isReferenceArray("string", regionAttributes));
             testCase.verifyFalse( ...
-                hdmf.zarr.conventions.isReferenceArray("string", struct()));
+                hdmf.zarr.isReferenceArray("string", struct()));
         end
 
         function specLocationUsesExactStorageKey(testCase)
             store = createStore();
 
-            hdmf.zarr.conventions.writeSpecLocation(store, "/specifications");
+            hdmf.zarr.writeSpecLocation(store, "/specifications");
             [rootBytes, ~] = store.get("zarr.json");
             rootText = string(native2unicode(rootBytes, "UTF-8"));
 
             testCase.verifySubstring(rootText, '".specloc":"/specifications"');
             testCase.verifyFalse(contains(rootText, '"x_specloc"'));
             testCase.verifyEqual( ...
-                hdmf.zarr.conventions.readSpecLocation(store), "/specifications");
+                hdmf.zarr.readSpecLocation(store), "/specifications");
         end
 
         function specLocationSurvivesConsolidationRefresh(testCase)
             store = createStore();
             zarr.create_group(store, Path="first");
             zarr.consolidate_metadata(store);
-            hdmf.zarr.conventions.writeSpecLocation(store, "/specifications");
+            hdmf.zarr.writeSpecLocation(store, "/specifications");
             zarr.create_group(store, Path="second");
 
-            wasRefreshed = hdmf.zarr.conventions.refreshConsolidatedMetadata(store);
+            wasRefreshed = hdmf.zarr.refreshConsolidatedMetadata(store);
             root = zarr.open(store);
 
             testCase.verifyTrue(wasRefreshed);
             testCase.verifyTrue(root.isKey("second"));
             testCase.verifyEqual( ...
-                hdmf.zarr.conventions.readSpecLocation(store), "/specifications");
+                hdmf.zarr.readSpecLocation(store), "/specifications");
         end
 
         function unconsolidatedStoreRemainsUnconsolidated(testCase)
             store = createStore();
 
-            wasRefreshed = hdmf.zarr.conventions.refreshConsolidatedMetadata(store);
+            wasRefreshed = hdmf.zarr.refreshConsolidatedMetadata(store);
             [rootBytes, ~] = store.get("zarr.json");
             rootText = string(native2unicode(rootBytes, "UTF-8"));
 

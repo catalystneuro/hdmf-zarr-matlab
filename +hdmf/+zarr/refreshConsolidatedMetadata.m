@@ -22,9 +22,9 @@ function wasRefreshed = refreshConsolidatedMetadata(store)
         return
     end
 
-    specLocation = hdmf.zarr.conventions.readSpecLocation(store);
+    specLocation = hdmf.zarr.readSpecLocation(store);
     zarr.consolidate_metadata(store);
     if strlength(specLocation) > 0
-        hdmf.zarr.conventions.writeSpecLocation(store, specLocation);
+        hdmf.zarr.writeSpecLocation(store, specLocation);
     end
 end

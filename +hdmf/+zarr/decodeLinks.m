@@ -1,6 +1,6 @@
 function links = decodeLinks(encodedLinks)
 %DECODELINKS Decode HDMF link records into neutral structs.
-%   links = hdmf.zarr.conventions.decodeLinks(value) accepts the zarr_link
+%   links = hdmf.zarr.decodeLinks(value) accepts the zarr_link
 %   attribute value or its JSON representation. The returned struct array
 %   has string fields name, source, path, object_id, and source_object_id.
 
@@ -34,7 +34,7 @@ function links = decodeLinks(encodedLinks)
         end
         name = requireLinkName(rawLink.name);
         try
-            reference = hdmf.zarr.conventions.decodeReference(rawLink);
+            reference = hdmf.zarr.decodeReference(rawLink);
         catch exception
             if startsWith(string(exception.identifier), "hdmf:conventions:")
                 error("hdmf:conventions:InvalidLink", ...

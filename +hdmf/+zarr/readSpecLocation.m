@@ -1,6 +1,6 @@
 function location = readSpecLocation(store)
 %READSPECLOCATION Read the root .specloc attribute from a Zarr store.
-%   location = hdmf.zarr.conventions.readSpecLocation(store) returns an
+%   location = hdmf.zarr.readSpecLocation(store) returns an
 %   empty string when the attribute is absent. The metadata is read as raw
 %   JSON so the leading dot in the storage key is preserved.
 

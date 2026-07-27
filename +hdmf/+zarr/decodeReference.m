@@ -1,6 +1,6 @@
 function reference = decodeReference(encodedReference)
 %DECODEREFERENCE Decode an HDMF object-reference record.
-%   reference = hdmf.zarr.conventions.decodeReference(value) accepts a raw
+%   reference = hdmf.zarr.decodeReference(value) accepts a raw
 %   reference struct, a JSON-encoded reference, or the attribute form
 %   struct("zarr_dtype", "object", "value", reference). The returned
 %   neutral struct has string fields source, path, object_id, and
