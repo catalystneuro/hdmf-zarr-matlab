@@ -22,26 +22,20 @@ backend) and [matzarr](https://github.com/catalystneuro/matzarr)'s translated
 
 ## MATLAB API
 
-The `hdmf.zarr` namespace is the stable integration boundary for storage
-backends such as MatNWB. It operates on neutral MATLAB structs and raw Zarr
-metadata; consumers remain responsible for mapping records to their own domain
-objects.
+The `hdmf.zarr` namespace exposes a small portable reference codec and a
+store-facing HDMF-Zarr facade.
 
-- `encodeReference` / `decodeReference` handle same-store and external object
-  reference records, JSON array elements, and attribute wrappers.
-- `encodeLinks` / `decodeLinks` handle `zarr_link` list values, including
-  singleton and external link records.
-- `isReferenceArray` identifies string arrays marked with
-  `zarr_dtype: "object"`.
-- `readSpecLocation` / `writeSpecLocation` preserve the exact `.specloc` key
-  in root metadata.
-- `refreshConsolidatedMetadata` refreshes existing consolidated metadata
-  without changing an unconsolidated store.
+- `encodeReference` / `decodeReference` are stateless transforms for
+  same-store and external object-reference records, JSON array elements, and
+  attribute wrappers. `matzarr` uses these without adopting the HDMF file
+  model.
+- `File` owns a Zarr store and provides link access (`links`, `addLink`,
+  `writeLinks`), reference-dataset detection and dereferencing, `.specloc`
+  access, and metadata refresh. It keeps HDMF-Zarr storage mutations and
+  node-level mechanics behind one facade.
 
 Region references are rejected explicitly because HDMF-Zarr does not yet
 define a complete interoperable storage representation for their selections.
-The higher-level `hdmf.zarr.File` facade delegates encoding and decoding to
-these functions while continuing to provide node resolution helpers.
 
 The tested Zarr dependency is `catalystneuro/zarr-matlab` v0.3.1.
 

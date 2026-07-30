@@ -53,10 +53,10 @@ classdef File < handle
             g = obj.asNode(groupOrPath);
             a = g.attrs;
             if ~isfield(a, 'zarr_link')
-                L = hdmf.zarr.decodeLinks([]);
+                L = hdmf.zarr.internal.decodeLinks([]);
                 return
             end
-            L = hdmf.zarr.decodeLinks(a.zarr_link);
+            L = hdmf.zarr.internal.decodeLinks(a.zarr_link);
         end
 
         function node = deref(obj, ref)
@@ -75,7 +75,7 @@ classdef File < handle
         function tf = isRefArray(~, node)
             %ISREFARRAY True if node is a zarr_dtype:"object" reference dataset.
             tf = isa(node, 'zarr.Array') && ...
-                hdmf.zarr.isReferenceArray(node.dtype, node.attrs);
+                hdmf.zarr.internal.isReferenceArray(node.dtype, node.attrs);
         end
 
         function nodes = derefAll(obj, refArrayOrNode)
@@ -109,14 +109,19 @@ classdef File < handle
                 'path', reference.path, ...
                 'object_id', reference.object_id, ...
                 'source_object_id', reference.source_object_id);
-            a = g.attrs;
-            if isfield(a, 'zarr_link')
-                existing = hdmf.zarr.decodeLinks(a.zarr_link);
-            else
-                existing = hdmf.zarr.decodeLinks([]);
+            obj.writeLinks(g, [obj.links(g), entry]);
+        end
+
+        function writeLinks(obj, groupOrPath, links)
+            %WRITELINKS Replace a group's zarr_link records.
+            %   writeLinks(f, groupOrPath, links) writes neutral link
+            %   records to a group. Records may target this or another
+            %   HDMF-Zarr store.
+            g = obj.asNode(groupOrPath);
+            if ~isa(g, 'zarr.Group')
+                error("hdmf:WriteError", "'%s' is not a group.", g.path);
             end
-            encodedLinks = hdmf.zarr.encodeLinks([existing, entry]);
-            g.setAttr('zarr_link', encodedLinks);
+            g.setAttr('zarr_link', hdmf.zarr.internal.encodeLinks(links));
             obj.refresh();
         end
 
@@ -180,16 +185,16 @@ classdef File < handle
             ref = hdmf.zarr.encodeReference(ref);
         end
 
-        function refresh(obj)
+        function wasRefreshed = refresh(obj)
             %REFRESH Re-read the root (and refresh consolidated metadata if
             %   this store carries it) after mutations.
-            hdmf.zarr.refreshConsolidatedMetadata(obj.store);
+            wasRefreshed = hdmf.zarr.internal.refreshConsolidatedMetadata(obj.store);
             obj.root = zarr.open(obj.store);
         end
 
         function p = specLoc(obj)
             %SPECLOC Path of the cached specifications group ("" if absent).
-            p = hdmf.zarr.readSpecLocation(obj.store);
+            p = hdmf.zarr.internal.readSpecLocation(obj.store);
         end
 
         function setSpecLoc(obj, location)
@@ -198,7 +203,7 @@ classdef File < handle
                 obj
                 location (1,1) string
             end
-            hdmf.zarr.writeSpecLocation(obj.store, location);
+            hdmf.zarr.internal.writeSpecLocation(obj.store, location);
             obj.root = zarr.open(obj.store);
         end
     end

@@ -1,5 +1,5 @@
 classdef TestConventionApi < matlab.unittest.TestCase
-    %TESTCONVENTIONAPI Contract tests for the neutral conventions API.
+    %TESTCONVENTIONAPI Contract tests for the public HDMF-Zarr API.
 
     methods (Test)
         function referenceFormatsRoundTrip(testCase)
@@ -49,24 +49,21 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "hdmf:conventions:UnsupportedRegionReference");
         end
 
-        function singletonLinkEncodesAsJsonList(testCase)
-            link = struct( ...
-                "name", "device", ...
-                "source", ".", ...
-                "path", "/general/devices/probe0");
+        function fileWritesSingletonLinkAsJsonList(testCase)
+            [file, store] = createFile();
 
-            attributeValue = hdmf.zarr.encodeLinks(link);
-            json = hdmf.zarr.encodeLinks(link, Format="json");
-            decoded = hdmf.zarr.decodeLinks(json);
+            file.addLink("links", "device", "target");
+            links = file.links("links");
+            [bytes, ~] = store.get("links/zarr.json");
+            json = string(native2unicode(bytes, "UTF-8"));
 
-            testCase.verifyClass(attributeValue, "cell");
-            testCase.verifyNumElements(attributeValue, 1);
-            testCase.verifyTrue(startsWith(json, "["));
-            testCase.verifyEqual(decoded.name, "device");
-            testCase.verifyEqual(decoded.path, "/general/devices/probe0");
+            testCase.verifyEqual(links.name, "device");
+            testCase.verifyEqual(links.path, "/target");
+            testCase.verifySubstring(json, '"zarr_link":[{');
         end
 
-        function externalLinkRoundTrips(testCase)
+        function fileWritesExternalLinks(testCase)
+            [file, ~] = createFile();
             link = struct( ...
                 "name", "external_data", ...
                 "source", "../external.nwb.zarr", ...
@@ -74,61 +71,63 @@ classdef TestConventionApi < matlab.unittest.TestCase
                 "object_id", "dataset-id", ...
                 "source_object_id", "external-file-id");
 
-            encoded = hdmf.zarr.encodeLinks(link);
-            decoded = hdmf.zarr.decodeLinks(encoded);
+            file.writeLinks("links", link);
+            decoded = file.links("links");
 
             testCase.verifyEqual(decoded.name, "external_data");
             testCase.verifyEqual(decoded.source, "../external.nwb.zarr");
             testCase.verifyEqual(decoded.object_id, "dataset-id");
         end
 
-        function referenceArrayRequiresTypeAndMarker(testCase)
-            objectAttributes = struct("zarr_dtype", "object");
-            regionAttributes = struct("zarr_dtype", "region");
+        function fileIdentifiesReferenceArrays(testCase)
+            [file, store] = createFile();
+            objectArray = zarr.create(store, 1, "string", Path="object");
+            objectArray.setAttr("zarr_dtype", "object");
+            numericArray = zarr.create(store, 1, "float64", Path="numeric");
+            numericArray.setAttr("zarr_dtype", "object");
+            regionArray = zarr.create(store, 1, "string", Path="region");
+            regionArray.setAttr("zarr_dtype", "region");
+            stringArray = zarr.create(store, 1, "string", Path="string");
 
-            testCase.verifyTrue( ...
-                hdmf.zarr.isReferenceArray("string", objectAttributes));
-            testCase.verifyFalse( ...
-                hdmf.zarr.isReferenceArray("float64", objectAttributes));
-            testCase.verifyFalse( ...
-                hdmf.zarr.isReferenceArray("string", regionAttributes));
-            testCase.verifyFalse( ...
-                hdmf.zarr.isReferenceArray("string", struct()));
+            testCase.verifyTrue(file.isRefArray(objectArray));
+            testCase.verifyFalse(file.isRefArray(numericArray));
+            testCase.verifyFalse(file.isRefArray(regionArray));
+            testCase.verifyFalse(file.isRefArray(stringArray));
         end
 
-        function specLocationUsesExactStorageKey(testCase)
+        function fileWritesSpecLocationWithExactStorageKey(testCase)
             store = createStore();
+            file = hdmf.zarr.open(store);
 
-            hdmf.zarr.writeSpecLocation(store, "/specifications");
+            file.setSpecLoc("/specifications");
             [rootBytes, ~] = store.get("zarr.json");
             rootText = string(native2unicode(rootBytes, "UTF-8"));
 
             testCase.verifySubstring(rootText, '".specloc":"/specifications"');
             testCase.verifyFalse(contains(rootText, '"x_specloc"'));
-            testCase.verifyEqual( ...
-                hdmf.zarr.readSpecLocation(store), "/specifications");
+            testCase.verifyEqual(file.specLoc(), "/specifications");
         end
 
-        function specLocationSurvivesConsolidationRefresh(testCase)
+        function fileRefreshPreservesSpecLocation(testCase)
             store = createStore();
             zarr.create_group(store, Path="first");
             zarr.consolidate_metadata(store);
-            hdmf.zarr.writeSpecLocation(store, "/specifications");
+            file = hdmf.zarr.open(store);
+            file.setSpecLoc("/specifications");
             zarr.create_group(store, Path="second");
 
-            wasRefreshed = hdmf.zarr.refreshConsolidatedMetadata(store);
-            root = zarr.open(store);
+            wasRefreshed = file.refresh();
 
             testCase.verifyTrue(wasRefreshed);
-            testCase.verifyTrue(root.isKey("second"));
-            testCase.verifyEqual( ...
-                hdmf.zarr.readSpecLocation(store), "/specifications");
+            testCase.verifyTrue(file.root.isKey("second"));
+            testCase.verifyEqual(file.specLoc(), "/specifications");
         end
 
-        function unconsolidatedStoreRemainsUnconsolidated(testCase)
+        function fileRefreshLeavesUnconsolidatedStoreUnconsolidated(testCase)
             store = createStore();
+            file = hdmf.zarr.open(store);
 
-            wasRefreshed = hdmf.zarr.refreshConsolidatedMetadata(store);
+            wasRefreshed = file.refresh();
             [rootBytes, ~] = store.get("zarr.json");
             rootText = string(native2unicode(rootBytes, "UTF-8"));
 
@@ -150,4 +149,11 @@ end
 function store = createStore()
     store = zarr.stores.MemoryStore();
     zarr.create_group(store, Attributes=struct("object_id", "file-id"));
+end
+
+function [file, store] = createFile()
+    store = createStore();
+    zarr.create_group(store, Path="links");
+    zarr.create_group(store, Path="target");
+    file = hdmf.zarr.open(store);
 end

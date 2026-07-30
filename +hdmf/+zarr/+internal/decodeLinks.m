@@ -1,6 +1,6 @@
 function links = decodeLinks(encodedLinks)
 %DECODELINKS Decode HDMF link records into neutral structs.
-%   links = hdmf.zarr.decodeLinks(value) accepts the zarr_link
+%   Internal helper for hdmf.zarr.File. Decodes the zarr_link
 %   attribute value or its JSON representation. The returned struct array
 %   has string fields name, source, path, object_id, and source_object_id.
 

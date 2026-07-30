@@ -1,6 +1,6 @@
 function tf = isReferenceArray(dataType, attributes)
 %ISREFERENCEARRAY Identify an HDMF object-reference array.
-%   tf = hdmf.zarr.isReferenceArray(dataType, attributes) is
+%   Internal helper for hdmf.zarr.File. True when the physical Zarr type
 %   true when the physical Zarr type is string and the reserved zarr_dtype
 %   attribute is "object".
 

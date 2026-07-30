@@ -1,6 +1,6 @@
 function wasRefreshed = refreshConsolidatedMetadata(store)
 %REFRESHCONSOLIDATEDMETADATA Refresh existing consolidated Zarr metadata.
-%   wasRefreshed = refreshConsolidatedMetadata(store) refreshes inline
+%   Internal helper for hdmf.zarr.File. Refreshes inline
 %   consolidated metadata only when the root already contains it. The
 %   function preserves the exact HDMF .specloc storage key.
 
@@ -22,9 +22,9 @@ function wasRefreshed = refreshConsolidatedMetadata(store)
         return
     end
 
-    specLocation = hdmf.zarr.readSpecLocation(store);
+    specLocation = hdmf.zarr.internal.readSpecLocation(store);
     zarr.consolidate_metadata(store);
     if strlength(specLocation) > 0
-        hdmf.zarr.writeSpecLocation(store, specLocation);
+        hdmf.zarr.internal.writeSpecLocation(store, specLocation);
     end
 end
