@@ -62,7 +62,7 @@ classdef TestReferenceLink < matlab.unittest.TestCase
                 tc.verifyClass(r, 'hdmf.zarr.Reference');
                 tc.verifyEqual(r.Path, "/a/b", "form " + i);
                 tc.verifyEqual(r.ObjectId, "oid", "form " + i);
-                tc.verifyTrue(ismissing(r.SourceObjectId), "form " + i);
+                tc.verifyEqual(r.SourceObjectId, "", "form " + i);
             end
         end
 
@@ -83,10 +83,51 @@ classdef TestReferenceLink < matlab.unittest.TestCase
             tc.verifyFalse(hdmf.zarr.Reference("x").isExternal());
         end
 
-        function decodeRejectsMissingPath(tc)
+        function decodeRejectsNonRecords(tc)
             tc.verifyError(@() hdmf.zarr.Reference.decode(struct('source', '.')), ...
+                "hdmf:InvalidReference");                       % no path field
+            tc.verifyError(@() hdmf.zarr.Reference.decode("null"), "hdmf:InvalidReference");
+            tc.verifyError(@() hdmf.zarr.Reference.decode("[1,2]"), "hdmf:InvalidReference");
+            tc.verifyError(@() hdmf.zarr.Reference.decode("not json"), "hdmf:InvalidReference");
+            % "" is what unwritten chunks of a string dataset read as
+            tc.verifyError(@() hdmf.zarr.Reference.decode(["{""path"":""/a""}"; ""]), ...
                 "hdmf:InvalidReference");
-            tc.verifyError(@() hdmf.zarr.Reference.decode(42), "hdmf:InvalidReference");
+            tc.verifyError(@() hdmf.zarr.Reference.decode(42), "MATLAB:validators:mustBeA");
+        end
+
+        function decodeAcceptsWhatEncodeReturns(tc)
+            % mixed ids -> encode returns a cell; decode must take it back
+            mixed = [hdmf.zarr.Reference("a"); hdmf.zarr.Reference("b", ObjectId="x")];
+            tc.verifyEqual(hdmf.zarr.Reference.decode(mixed.encode()), mixed);
+            same = [hdmf.zarr.Reference("a"), hdmf.zarr.Reference("b")];
+            tc.verifyEqual(hdmf.zarr.Reference.decode(same.encode()), same);
+        end
+
+        function recordWithoutSourceIsExternal(tc)
+            % hdmf-zarr's resolve_ref treats a missing source as "path names
+            % another file"; it must not be read as an in-store reference.
+            ref = hdmf.zarr.Reference.decode(struct('path', 'other.nwb.zarr'));
+            tc.verifyEqual(ref.Source, "");
+            tc.verifyTrue(ref.isExternal());
+            % and it round-trips without inventing a source
+            tc.verifyFalse(isfield(ref.encode(), 'source'));
+            tc.verifyEqual(hdmf.zarr.Reference.decode(ref.encodeJson()), ref);
+        end
+
+        function identicalReferencesAreEqual(tc)
+            % unknown ids are "" rather than missing so isequal/unique work
+            tc.verifyTrue(isequal(hdmf.zarr.Reference("x"), hdmf.zarr.Reference("x")));
+            tc.verifyTrue(isequal(hdmf.zarr.Link("a", "/x"), hdmf.zarr.Link("a", "/x")));
+            tc.verifyFalse(isequal(hdmf.zarr.Reference("x"), ...
+                hdmf.zarr.Reference("x", ObjectId="1")));
+        end
+
+        function emptyArraysKeepTheirTypes(tc)
+            empty = hdmf.zarr.Reference.empty(0, 1);
+            tc.verifyClass(empty.encodeJson(), 'string');
+            tc.verifySize(empty.encodeJson(), [0 1]);
+            tc.verifyClass(empty.isExternal(), 'logical');
+            tc.verifySize(empty.isExternal(), [0 1]);
         end
 
         % --------------------------------------------------------------- Link
@@ -114,6 +155,10 @@ classdef TestReferenceLink < matlab.unittest.TestCase
 
         function linkFromAttributesHandlesAbsence(tc)
             tc.verifySize(hdmf.zarr.Link.fromAttributes(struct()), [1 0]);
+            % hdmf-zarr writes "zarr_link": [] before the first link is added;
+            % jsondecode turns that into a 0x0 double
+            tc.verifySize(hdmf.zarr.Link.fromAttributes(struct('zarr_link', [])), [1 0]);
+            tc.verifySize(hdmf.zarr.Link.decode({}), [1 0]);
             attrs = struct('zarr_link', {{struct('name', 'n', 'source', '.', 'path', '/p')}});
             links = hdmf.zarr.Link.fromAttributes(attrs);
             tc.verifyEqual(links.Name, "n");
