@@ -39,9 +39,10 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             dev = f.resolve("acquisition/device");
             tc.verifyEqual(string(char(dev.attrs.neurodata_type)), "Device");
             L = f.links("acquisition");
-            tc.verifyEqual(L(1).name, "device");
-            tc.verifyEqual(L(1).source, ".");
-            tc.verifyEqual(L(1).path, "/general/devices/probe0");
+            tc.verifyEqual(L(1).Name, "device");
+            tc.verifyEqual(L(1).Target.Source, ".");
+            tc.verifyEqual(L(1).Target.Path, "/general/devices/probe0");
+            tc.verifyEqual(L(1).Target.ObjectId, "dev-oid-1");
         end
 
         function singleLinkSerializesAsList(tc)
@@ -57,7 +58,7 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             f.writeRefs("acquisition/ts/electrodes_ish", ...
                 ["general/devices/probe0", "acquisition/ts/data"]);
             col = f.resolve("acquisition/ts/electrodes_ish");
-            tc.verifyTrue(f.isRefArray(col));
+            tc.verifyTrue(hdmf.zarr.isReferenceArray(col));
             nodes = f.derefAll(col);
             tc.verifyEqual(string(char(nodes{1}.attrs.object_id)), "dev-oid-1");
             tc.verifyClass(nodes{2}, 'zarr.Array');

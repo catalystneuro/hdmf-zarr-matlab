@@ -1,9 +1,15 @@
 classdef File < handle
     %FILE An hdmf-zarr hierarchy: Zarr v3 plus link/reference conventions.
-    %   Implements the storage conventions of
-    %   https://hdmf-zarr.readthedocs.io/en/latest/storage.html :
-    %     - zarr_link group attributes (soft + external links)
-    %     - zarr_dtype:"object" references in datasets and attributes
+    %   Convenience wrapper that binds a store to the store-independent
+    %   conventions layer:
+    %     - hdmf.zarr.Reference / hdmf.zarr.Link  encode and decode the
+    %       zarr_dtype:"object" and zarr_link records
+    %     - hdmf.zarr.resolve                      follows links through paths
+    %   File adds what needs the store: opening the root, looking up
+    %   object ids when building references, writing attributes and
+    %   datasets, and refreshing consolidated metadata after mutations.
+    %   Consumers with their own file model (e.g. MatNWB) can use the
+    %   conventions layer directly and skip File.
 
     properties (SetAccess = private)
         store
@@ -19,98 +25,47 @@ classdef File < handle
             end
         end
 
-        function node = resolve(obj, path)
-            %RESOLVE Open the node at path, following zarr_link entries.
-            %   Each path segment may be a real child or a link name; links
-            %   restart resolution at their target (source "." = this store).
-            parts = split(zarr.internal.normalize_path(path), "/");
-            parts = parts(strlength(parts) > 0);
-            node = obj.root;
-            i = 1;
-            while i <= numel(parts)
-                seg = parts(i);
-                if ~isa(node, 'zarr.Group')
-                    error("hdmf:ResolveError", ...
-                        "'%s' is not a group; cannot descend into '%s'.", node.path, seg);
-                end
-                if node.isKey(seg)
-                    node = node.item(seg);
-                else
-                    link = obj.findLink(node, seg);
-                    if isempty(link)
-                        error("hdmf:ResolveError", ...
-                            "No child or link named '%s' under '/%s'.", seg, node.path);
-                    end
-                    node = obj.followLink(link);
-                end
-                i = i + 1;
-            end
+        function node = resolve(obj, target)
+            %RESOLVE Open the node at a path or Reference, following links.
+            %   See hdmf.zarr.resolve.
+            node = hdmf.zarr.resolve(obj.root, target);
         end
 
         function L = links(obj, groupOrPath)
-            %LINKS zarr_link entries of a group, as a struct array
-            %   (fields: name, source, path, and optionally object ids).
+            %LINKS zarr_link entries of a group, as an hdmf.zarr.Link array.
             g = obj.asNode(groupOrPath);
-            L = struct('name', {}, 'source', {}, 'path', {});
-            a = g.attrs;
-            if ~isfield(a, 'zarr_link')
-                return
-            end
-            raw = a.zarr_link;
-            if isstruct(raw)
-                entries = num2cell(raw);
-            else
-                entries = raw;
-            end
-            for i = 1:numel(entries)
-                e = entries{i};
-                L(i).name = string(char(e.name));
-                L(i).source = string(char(e.source));
-                L(i).path = string(char(e.path));
-            end
+            L = hdmf.zarr.Link.fromAttributes(g.attrs);
         end
 
         function node = deref(obj, ref)
-            %DEREF Resolve a reference (struct with source/path, a JSON
-            %   string of one, or an attribute value of the
-            %   {"zarr_dtype":"object","value":{...}} form) to its node.
-            if isstring(ref) || ischar(ref)
-                ref = jsondecode(char(ref));
+            %DEREF Resolve a reference to its node. ref may be a Reference
+            %   or any on-disk form accepted by hdmf.zarr.Reference.decode
+            %   (JSON string, attribute-form struct, bare record).
+            if ~isa(ref, 'hdmf.zarr.Reference')
+                ref = hdmf.zarr.Reference.decode(ref);
             end
-            if isfield(ref, 'zarr_dtype') && isfield(ref, 'value')
-                ref = ref.value;   % attribute form
-            end
-            src = string(char(ref.source));
-            if src ~= "." && strlength(src) > 0
-                error("hdmf:UnsupportedFeature", ...
-                    "External reference sources are not supported yet ('%s').", src);
-            end
-            node = obj.resolve(string(char(ref.path)));
+            node = obj.resolve(ref);
         end
 
-        function tf = isRefArray(~, node)
-            %ISREFARRAY True if node is a zarr_dtype:"object" reference dataset.
-            tf = isa(node, 'zarr.Array') && isfield(node.attrs, 'zarr_dtype') && ...
-                string(char(node.attrs.zarr_dtype)) == "object" && ...
-                node.dtype == "string";
-        end
-
-        function nodes = derefAll(obj, refArrayOrNode)
-            %DEREFALL Dereference every element of a reference dataset.
-            %   Returns a cell array shaped like the dataset.
-            if isa(refArrayOrNode, 'zarr.Array')
-                refs = refArrayOrNode.read();
+        function nodes = derefAll(obj, refArrayOrValues)
+            %DEREFALL Dereference every element of a reference dataset (or of
+            %   an already-read array of references). Returns a cell array
+            %   shaped like the dataset.
+            if isa(refArrayOrValues, 'zarr.Array')
+                refs = hdmf.zarr.Reference.decode(refArrayOrValues.read());
+            elseif isa(refArrayOrValues, 'hdmf.zarr.Reference')
+                refs = refArrayOrValues;
             else
-                refs = refArrayOrNode;
+                refs = hdmf.zarr.Reference.decode(refArrayOrValues);
             end
             nodes = cell(size(refs));
             for i = 1:numel(refs)
-                nodes{i} = obj.deref(refs(i));
+                nodes{i} = obj.resolve(refs(i));
             end
         end
 
         % ------------------------------------------------------------------
-        % Write side (M4): create links and references per the conventions.
+        % Write side: create links and references per the conventions.
 
         function addLink(obj, groupPath, name, target)
             %ADDLINK Add a soft link: group's zarr_link gains an entry.
@@ -119,19 +74,9 @@ classdef File < handle
             if ~isa(g, 'zarr.Group')
                 error("hdmf:WriteError", "'%s' is not a group.", groupPath);
             end
-            entry = obj.makeRef(target);
-            entry.name = char(name);
-            a = g.attrs;
-            if isfield(a, 'zarr_link')
-                existing = a.zarr_link;
-                if isstruct(existing), existing = num2cell(existing); end
-            else
-                existing = {};
-            end
-            existing{end + 1} = entry;
-            % keep as a cell: jsonencode(cell) always emits a JSON list,
-            % even with one entry (a 1x1 struct array would emit an object)
-            g.setAttr('zarr_link', existing);
+            newLink = hdmf.zarr.Link(name, obj.makeReference(target));
+            links = [hdmf.zarr.Link.fromAttributes(g.attrs), newLink];
+            g.setAttr('zarr_link', links.encode());
             obj.refresh();
         end
 
@@ -146,20 +91,19 @@ classdef File < handle
                 opts.Attributes struct = struct()
             end
             n = numel(targets);
-            jsonRefs = strings(n, 1);
+            refs = repmat(hdmf.zarr.Reference(), n, 1);
             for i = 1:n
                 if iscell(targets)
-                    t = targets{i};
+                    refs(i) = obj.makeReference(targets{i});
                 else
-                    t = targets(i);
+                    refs(i) = obj.makeReference(targets(i));
                 end
-                jsonRefs(i) = string(jsonencode(obj.makeRef(t)));
             end
             attrs = opts.Attributes;
             attrs.zarr_dtype = 'object';
             z = zarr.create(obj.store, n, "string", Path=path, ...
                 Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attrs);
-            z(:) = jsonRefs;
+            z(:) = refs.encodeJson();
             obj.refresh();
         end
 
@@ -167,26 +111,26 @@ classdef File < handle
             %SETREFATTR Store an object reference in an attribute
             %   ({"zarr_dtype":"object","value":{...}} form).
             node = obj.resolve(nodePath);
-            node.setAttr(attrName, struct( ...
-                'zarr_dtype', 'object', 'value', obj.makeRef(target)));
+            node.setAttr(attrName, obj.makeReference(target).encodeAttribute());
             obj.refresh();
         end
 
-        function ref = makeRef(obj, target)
-            %MAKEREF Build a {source, path, object ids} reference struct.
+        function ref = makeReference(obj, target)
+            %MAKEREFERENCE Reference to a node (or path), with the object ids
+            %   of the target and of this store's root filled in when present.
             if isa(target, 'zarr.Group') || isa(target, 'zarr.Array')
                 node = target;
             else
                 node = obj.resolve(target);
             end
-            ref = struct('source', '.', 'path', char("/" + node.path));
+            ref = hdmf.zarr.Reference(node.path);
             a = node.attrs;
             if isfield(a, 'object_id')
-                ref.object_id = char(a.object_id);
+                ref.ObjectId = string(char(a.object_id));
             end
             ra = obj.root.attrs;
             if isfield(ra, 'object_id')
-                ref.source_object_id = char(ra.object_id);
+                ref.SourceObjectId = string(char(ra.object_id));
             end
         end
 
@@ -222,25 +166,6 @@ classdef File < handle
                 g = obj.resolve(groupOrPath);
             end
         end
-
-        function link = findLink(obj, group, name)
-            link = [];
-            L = obj.links(group);
-            for i = 1:numel(L)
-                if L(i).name == name
-                    link = L(i);
-                    return
-                end
-            end
-        end
-
-        function node = followLink(obj, link)
-            if link.source ~= "." && strlength(link.source) > 0
-                error("hdmf:UnsupportedFeature", ...
-                    "External links are not supported yet (source '%s').", link.source);
-            end
-            node = obj.resolve(link.path);
-        end
     end
 end
 
@@ -248,4 +173,3 @@ function f = x_specloc_field()
 % '.specloc' is not a valid struct field; jsondecode normalizes it.
 f = matlab.lang.makeValidName('.specloc');
 end
-
