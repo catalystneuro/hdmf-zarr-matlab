@@ -53,6 +53,19 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             tc.verifySubstring(txt, '"zarr_link":[{');   % list, not object
         end
 
+        function compoundDtypeHintIsNotAReferenceArray(tc)
+            % hdmf-zarr tags a compound dataset with a zarr_dtype LIST of
+            % per-field descriptors; the predicate must answer false, not
+            % choke on the non-text attribute.
+            [~, store] = TestWriteConventions.freshFile(fullfile(tc.work, "e.zarr"));
+            fieldHints = {struct('name', 'x', 'dtype', 'int32'), ...
+                struct('name', 'ts', 'dtype', 'object')};
+            arr = zarr.create(store, 2, "string", Path="acquisition/compound_ish", ...
+                Attributes=struct('zarr_dtype', {fieldHints}));
+            tc.verifyFalse(hdmf.zarr.isReferenceArray(arr));
+            tc.verifyFalse(hdmf.zarr.isReferenceArray(struct('attrs', 1)));
+        end
+
         function refDatasetRoundTrip(tc)
             [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "c.zarr"));
             f.writeRefs("acquisition/ts/electrodes_ish", ...

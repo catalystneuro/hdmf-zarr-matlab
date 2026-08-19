@@ -5,8 +5,14 @@ function tf = isReferenceArray(node)
 %   zarr_dtype = "object". Decode its elements with
 %   hdmf.zarr.Reference.decode(node.read()). Like other is* predicates it
 %   accepts any value and answers false for anything that is not such a
-%   dataset.
+%   dataset -- including arrays whose zarr_dtype is not text at all (for a
+%   compound dtype hdmf-zarr writes a list of per-field descriptors there).
 
-tf = isa(node, 'zarr.Array') && isfield(node.attrs, 'zarr_dtype') && ...
-    string(char(node.attrs.zarr_dtype)) == "object" && node.dtype == "string";
+tf = isa(node, 'zarr.Array') && node.dtype == "string" && ...
+    isfield(node.attrs, 'zarr_dtype') && isTextScalar(node.attrs.zarr_dtype) && ...
+    string(node.attrs.zarr_dtype) == "object";
+end
+
+function tf = isTextScalar(value)
+tf = (ischar(value) && (isrow(value) || isempty(value))) || (isstring(value) && isscalar(value));
 end
