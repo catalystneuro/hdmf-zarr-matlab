@@ -51,12 +51,12 @@ classdef File < handle
             %DEREFALL Dereference every element of a reference dataset (or of
             %   an already-read array of references). Returns a cell array
             %   shaped like the dataset.
-            if isa(refArrayOrValues, 'zarr.Array')
-                refs = hdmf.zarr.Reference.decode(refArrayOrValues.read());
-            elseif isa(refArrayOrValues, 'hdmf.zarr.Reference')
-                refs = refArrayOrValues;
-            else
-                refs = hdmf.zarr.Reference.decode(refArrayOrValues);
+            refs = refArrayOrValues;
+            if isa(refs, 'zarr.Array')
+                refs = refs.read();
+            end
+            if ~isa(refs, 'hdmf.zarr.Reference')
+                refs = hdmf.zarr.Reference.decode(refs);
             end
             nodes = cell(size(refs));
             for i = 1:numel(refs)
@@ -118,11 +118,7 @@ classdef File < handle
         function ref = makeReference(obj, target)
             %MAKEREFERENCE Reference to a node (or path), with the object ids
             %   of the target and of this store's root filled in when present.
-            if isa(target, 'zarr.Group') || isa(target, 'zarr.Array')
-                node = target;
-            else
-                node = obj.resolve(target);
-            end
+            node = obj.asNode(target);
             ref = hdmf.zarr.Reference(node.path);
             a = node.attrs;
             if isfield(a, 'object_id')

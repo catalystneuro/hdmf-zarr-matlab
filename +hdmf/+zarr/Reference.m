@@ -1,26 +1,17 @@
 classdef Reference
     %REFERENCE An hdmf-zarr object reference, independent of any store.
-    %   The canonical in-memory form of the {source, path, object_id,
-    %   source_object_id} record defined by the hdmf-zarr storage spec
-    %   (https://hdmf-zarr.readthedocs.io/en/latest/storage.html).
+    %   In-memory form of the {source, path, object_id, source_object_id}
+    %   record of the hdmf-zarr storage spec
+    %   (https://hdmf-zarr.readthedocs.io/en/latest/storage.html), which
+    %   appears on disk as a JSON string (elements of zarr_dtype:"object"
+    %   datasets; encodeJson), wrapped as {"zarr_dtype":"object","value":
+    %   <record>} in attributes (encodeAttribute), or with a "name" in
+    %   zarr_link lists (hdmf.zarr.Link). decode accepts all of these.
+    %   encode and encodeJson are element-wise and differ only in format.
     %
-    %   A reference appears on disk in three shapes; decode accepts all of
-    %   them and the encode* methods produce each:
-    %     - bare record:       {"source": ".", "path": "/a/b", ...}
-    %                          (one element of a zarr_dtype:"object" dataset,
-    %                          stored as a JSON string; see encodeJson)
-    %     - attribute form:    {"zarr_dtype": "object", "value": <record>}
-    %                          (see encodeAttribute)
-    %     - zarr_link entry:   <record> plus "name" (see hdmf.zarr.Link)
-    %
-    %   Only the shape of the record lives here. Looking up object ids or
-    %   following the path to a node is the job of hdmf.zarr.File /
-    %   hdmf.zarr.resolve, so consumers that already know their object ids
-    %   (e.g. MatNWB) can build references without a second traversal.
-    %
-    %   encode and encodeJson are element-wise and differ only in format:
-    %   encode gives record structs (struct array if homogeneous, else a
-    %   cell, as jsondecode does), encodeJson gives one JSON string each.
+    %   Only the record's shape lives here; looking up object ids and
+    %   following paths belong to hdmf.zarr.File / hdmf.zarr.resolve, so a
+    %   consumer that already knows its ids (MatNWB) never re-traverses.
     %
     %   Example:
     %     ref = hdmf.zarr.Reference("general/devices/probe0", ObjectId="abc");
@@ -66,10 +57,7 @@ classdef Reference
 
         function tf = isExternal(obj)
             %ISEXTERNAL True if the target lives in another store. Element-wise.
-            tf = false(size(obj));
-            for i = 1:numel(obj)
-                tf(i) = obj(i).Source ~= "." && strlength(obj(i).Source) > 0;
-            end
+            tf = arrayfun(@(r) r.Source ~= "." && strlength(r.Source) > 0, obj);
         end
 
         function s = encode(obj)
@@ -95,10 +83,7 @@ classdef Reference
         function txt = encodeJson(obj)
             %ENCODEJSON Wire record(s) as JSON string(s), shaped like obj.
             %   This is the element format of zarr_dtype:"object" datasets.
-            txt = strings(size(obj));
-            for i = 1:numel(obj)
-                txt(i) = string(jsonencode(encodeOne(obj(i))));
-            end
+            txt = arrayfun(@(r) string(jsonencode(encodeOne(r))), obj);
         end
 
         function s = encodeAttribute(obj)
@@ -113,17 +98,13 @@ classdef Reference
 
     methods (Static)
         function refs = decode(value)
-            %DECODE Parse reference(s) from any on-disk shape.
-            %   value may be a JSON string (or string array / char), the
-            %   attribute form {zarr_dtype, value}, a bare record struct, or
-            %   a struct array / cell of either. Returns a Reference array
-            %   shaped like the input. Link entries (with a "name" field)
-            %   decode too; the name is simply ignored — use hdmf.zarr.Link
-            %   to keep it.
+            %DECODE Parse reference(s) from any on-disk shape: JSON string(s)
+            %   (string array or char), attribute-form structs
+            %   {zarr_dtype, value}, or bare record structs. Returns a
+            %   Reference array shaped like the input.
             if ischar(value)
                 value = string(value);
-            end
-            if ~(isstring(value) || iscell(value) || isstruct(value))
+            elseif ~(isstring(value) || isstruct(value))
                 error("hdmf:InvalidReference", ...
                     "Cannot decode a reference from a %s. Expected a JSON string or a struct.", ...
                     class(value));
@@ -132,8 +113,6 @@ classdef Reference
             for i = 1:numel(value)
                 if isstring(value)
                     refs(i) = decodeOne(jsondecode(char(value(i))));
-                elseif iscell(value)
-                    refs(i) = hdmf.zarr.Reference.decode(value{i});
                 else
                     refs(i) = decodeOne(value(i));
                 end
