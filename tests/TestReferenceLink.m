@@ -23,6 +23,20 @@ classdef TestReferenceLink < matlab.unittest.TestCase
                 'object_id', 'oid', 'source_object_id', 'root'));
         end
 
+        function encodeArrayIsStructIfHomogeneousElseCell(tc)
+            same = [hdmf.zarr.Reference("a"), hdmf.zarr.Reference("b")];
+            s = same.encode();
+            tc.verifyClass(s, 'struct');
+            tc.verifySize(s, [1 2]);
+            tc.verifyEqual({s.path}, {'/a', '/b'});
+            mixed = [hdmf.zarr.Reference("a"); hdmf.zarr.Reference("b", ObjectId="x")];
+            c = mixed.encode();
+            tc.verifyClass(c, 'cell');    % records differ in fields, as jsondecode would return
+            tc.verifySize(c, [2 1]);
+            tc.verifyEqual(c{2}.object_id, 'x');
+            tc.verifySize(hdmf.zarr.Reference.empty(0, 1).encode(), [0 1]);
+        end
+
         function encodeJsonIsElementwise(tc)
             refs = [hdmf.zarr.Reference("a"); hdmf.zarr.Reference("b", ObjectId="x")];
             txt = refs.encodeJson();

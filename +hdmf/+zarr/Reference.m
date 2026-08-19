@@ -18,6 +18,10 @@ classdef Reference
     %   hdmf.zarr.resolve, so consumers that already know their object ids
     %   (e.g. MatNWB) can build references without a second traversal.
     %
+    %   encode and encodeJson are element-wise and differ only in format:
+    %   encode gives record structs (struct array if homogeneous, else a
+    %   cell, as jsondecode does), encodeJson gives one JSON string each.
+    %
     %   Example:
     %     ref = hdmf.zarr.Reference("general/devices/probe0", ObjectId="abc");
     %     ref.encode()          % struct('source','.','path','/general/...',...)
@@ -69,14 +73,23 @@ classdef Reference
         end
 
         function s = encode(obj)
-            %ENCODE Wire record: struct with fields source, path and, when
-            %   known, object_id / source_object_id. Scalar only, because
-            %   records with and without ids cannot form one struct array;
-            %   use encodeJson for arrays.
-            arguments
-                obj (1,1) hdmf.zarr.Reference
+            %ENCODE Wire record(s): struct with fields source, path and, when
+            %   known, object_id / source_object_id. Element-wise, shaped
+            %   like obj. Because ids are omitted when unknown, records can
+            %   have different fields; as jsondecode does, the result is a
+            %   struct array when all records share the same fields and a
+            %   cell array of structs otherwise.
+            records = cell(size(obj));
+            for i = 1:numel(obj)
+                records{i} = encodeOne(obj(i));
             end
-            s = encodeOne(obj);
+            if isempty(records)
+                s = reshape(struct('source', {}, 'path', {}), size(obj));
+            elseif all(cellfun(@(r) isequal(fieldnames(r), fieldnames(records{1})), records))
+                s = reshape([records{:}], size(obj));
+            else
+                s = records;
+            end
         end
 
         function txt = encodeJson(obj)
