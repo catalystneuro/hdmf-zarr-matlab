@@ -1,22 +1,22 @@
 classdef Reference
-    %REFERENCE - An hdmf-zarr object reference, independent of any store.
-    %   In-memory form of the {source, path, object_id, source_object_id}
-    %   record of the hdmf-zarr storage spec. On disk the record appears as
-    %   a JSON string (elements of zarr_dtype:"object" datasets; encodeJson),
-    %   wrapped as {"zarr_dtype":"object","value":<record>} in attributes
-    %   (encodeAttribute), or with a "name" in zarr_link lists
-    %   (hdmf.zarr.Link). decode accepts all of these. encode and encodeJson
-    %   are element-wise and differ only in format.
-    %
-    %   Only the record's shape lives here; looking up object ids and
-    %   following paths belong to hdmf.zarr.File / hdmf.zarr.resolve, so a
-    %   consumer that already knows its ids (MatNWB) never re-traverses.
-    %
-    %   Example:
-    %     ref = hdmf.zarr.Reference("general/devices/probe0", ObjectId="abc");
-    %     ref.encode()       % struct('source','.','path','/general/...',...)
-    %     ref.encodeJson()   % the same as a JSON string
-    %     hdmf.zarr.Reference.decode('{"source":".","path":"/a/b"}')
+%REFERENCE - An hdmf-zarr object reference, independent of any store.
+%   In-memory form of the {source, path, object_id, source_object_id}
+%   record of the hdmf-zarr storage spec. On disk the record appears as
+%   a JSON string (elements of zarr_dtype:"object" datasets; encodeJson),
+%   wrapped as {"zarr_dtype":"object","value":<record>} in attributes
+%   (encodeAttribute), or with a "name" in zarr_link lists
+%   (hdmf.zarr.Link). decode accepts all of these. encode and encodeJson
+%   are element-wise and differ only in format.
+%
+%   Only the record's shape lives here; looking up object ids and
+%   following paths belong to hdmf.zarr.File / hdmf.zarr.resolve, so a
+%   consumer that already knows its object ids need not re-traverse.
+%
+%   Example:
+%     ref = hdmf.zarr.Reference("general/devices/probe0", ObjectId="abc");
+%     ref.encode()       % struct('source','.','path','/general/...',...)
+%     ref.encodeJson()   % the same as a JSON string
+%     hdmf.zarr.Reference.decode('{"source":".","path":"/a/b"}')
 
     properties
         % Store the target lives in. "." is this store; anything else names
