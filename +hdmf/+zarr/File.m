@@ -1,24 +1,58 @@
 classdef File < handle
-    %FILE - An hdmf-zarr hierarchy: Zarr v3 plus link/reference conventions.
-    %   Convenience wrapper that binds a store to the store-independent
-    %   conventions layer:
-    %     - hdmf.zarr.Reference / hdmf.zarr.Link  encode and decode the
-    %       zarr_dtype:"object" and zarr_link records
-    %     - hdmf.zarr.resolve                      follows links through paths
-    %   File adds what needs the store: opening the root, looking up
-    %   object ids when building references, writing attributes and
-    %   datasets, and refreshing consolidated metadata after mutations.
-    %   Consumers with their own file model (e.g. MatNWB) can use the
-    %   conventions layer directly and skip File.
+%File - An hdmf-zarr hierarchy: a Zarr store plus links and references
+%
+%   File binds a Zarr store to the store-independent conventions layer
+%   (hdmf.zarr.Reference, hdmf.zarr.Link, hdmf.zarr.resolve) and adds
+%   everything that needs the store: opening the root, following paths
+%   and links to nodes, dereferencing references, looking up object ids
+%   when building references, writing links, reference datasets and
+%   reference attributes, and refreshing consolidated metadata after
+%   mutations. Consumers with their own file model (e.g. MatNWB) can
+%   use the conventions layer directly and skip File.
+%
+%   f = File(store) opens the hierarchy rooted at store, a zarr store
+%   object (e.g. zarr.stores.LocalStore). For a folder path or URL,
+%   use hdmf.zarr.open, which resolves it to a store first.
+%
+%   File functions:
+%       resolve       - Open the node at a path or Reference
+%       deref         - Resolve a reference to its node
+%       derefAll      - Dereference a whole reference dataset
+%       links         - zarr_link entries of a group, as a Link array
+%       addLink       - Add a soft link to a group
+%       writeRefs     - Create a reference dataset
+%       setRefAttr    - Store an object reference in an attribute
+%       makeReference - Reference to a node, with object ids filled in
+%       refresh       - Re-read the root after mutations
+%       specLoc       - Path of the cached specifications group
+%
+%   File properties:
+%       store - The underlying zarr store object
+%       root  - zarr.Group at the top of the hierarchy
+%
+%   Example: Create a store, add a link, follow it
+%       s = tempname + ".zarr";
+%       g = zarr.create_group(s);
+%       g.createGroup("devices").createGroup("probe0");
+%       f = hdmf.zarr.open(s);
+%       f.addLink("/", "probe", "devices/probe0");
+%       f.resolve("probe").path   % "devices/probe0"
+%
+%   See also hdmf.zarr.open, hdmf.zarr.Reference, hdmf.zarr.Link,
+%   hdmf.zarr.resolve
 
     properties (SetAccess = private)
+        %store - The underlying zarr store object
         store
-        root      % zarr.Group
+
+        %root - zarr.Group at the top of the hierarchy
+        root
     end
 
     methods
         function obj = File(store)
-            %FILE - Open the hierarchy rooted at store.
+        %File - Open the hierarchy rooted at store
+
             obj.store = store;
             obj.root = zarr.open(store);
             if ~isa(obj.root, 'zarr.Group')
@@ -27,22 +61,32 @@ classdef File < handle
         end
 
         function node = resolve(obj, target)
-            %RESOLVE - Open the node at a path or Reference, following links.
-            %   See hdmf.zarr.resolve.
+        %resolve - Open the node at a path or Reference, following links
+        %   node = resolve(obj, target) opens the node target points
+        %   to; target is a path ("general/devices/probe0") or a
+        %   scalar hdmf.zarr.Reference. Links along the path are
+        %   followed transparently. See hdmf.zarr.resolve.
+
             node = hdmf.zarr.resolve(obj.root, target);
         end
 
         function linkList = links(obj, groupOrPath)
-            %LINKS - zarr_link entries of a group, as an hdmf.zarr.Link array.
+        %links - zarr_link entries of a group, as a Link array
+        %   linkList = links(obj, groupOrPath) returns the links
+        %   declared by a group (a zarr.Group or a path to one) as an
+        %   hdmf.zarr.Link array; 1x0 if the group declares none.
+
             group = obj.asNode(groupOrPath);
             linkList = hdmf.zarr.Link.fromAttributes(group.attrs);
         end
 
         function node = deref(obj, ref)
-            %DEREF - Resolve a reference to its node.
-            %   ref may be a Reference or any on-disk form accepted by
-            %   hdmf.zarr.Reference.decode (JSON string, attribute-form
-            %   struct, bare record).
+        %deref - Resolve a reference to its node
+        %   node = deref(obj, ref) opens the node ref points to. ref
+        %   may be an hdmf.zarr.Reference or any on-disk form accepted
+        %   by hdmf.zarr.Reference.decode (JSON string, attribute-form
+        %   struct, bare record).
+
             arguments
                 obj
                 ref {mustBeA(ref, ["hdmf.zarr.Reference", "string", "char", "struct"])}
@@ -54,11 +98,14 @@ classdef File < handle
         end
 
         function nodes = derefAll(obj, refArrayOrValues)
-            %DEREFALL - Dereference every element of a reference dataset.
-            %   Accepts the zarr.Array itself, its read() values, or a
-            %   Reference array. Returns a cell array shaped like the input.
-            %   Each distinct path is resolved once: reference columns
-            %   typically repeat a few targets many times.
+        %derefAll - Dereference every element of a reference dataset
+        %   nodes = derefAll(obj, refArrayOrValues) opens the target of
+        %   each reference and returns them as a cell array shaped like
+        %   the input, which may be the zarr.Array itself, its read()
+        %   values, or a Reference array. Each distinct path is
+        %   resolved once: reference columns typically repeat a few
+        %   targets many times.
+
             arguments
                 obj
                 refArrayOrValues {mustBeA(refArrayOrValues, ...
@@ -89,8 +136,12 @@ classdef File < handle
         % Write side: create links and references per the conventions.
 
         function addLink(obj, groupPath, name, target)
-            %ADDLINK - Add a soft link: group's zarr_link gains an entry.
-            %   addLink(f, "analysis", "device", "general/devices/probe0")
+        %addLink - Add a soft link: group's zarr_link gains an entry
+        %   addLink(obj, groupPath, name, target) makes target (a path
+        %   or node in this store) appear as the child name of the
+        %   group at groupPath, e.g.
+        %   addLink(f, "analysis", "device", "general/devices/probe0")
+
             arguments
                 obj
                 groupPath (1,1) string
@@ -119,9 +170,15 @@ classdef File < handle
         end
 
         function refDataset = writeRefs(obj, path, targets, opts)
-            %WRITEREFS - Create a reference dataset (zarr_dtype:"object").
-            %   writeRefs(f, "table/col", ["a/b", "a/c"]) writes a string-dtype
-            %   array of JSON references, one per target path (or node).
+        %writeRefs - Create a reference dataset (zarr_dtype:"object")
+        %   refDataset = writeRefs(obj, path, targets) writes a
+        %   string-dtype array at path with one JSON reference record
+        %   per element of targets (paths or nodes), e.g.
+        %   writeRefs(f, "table/col", ["a/b", "a/c"])
+        %
+        %   refDataset = writeRefs(obj, path, targets, Attributes=attrs)
+        %   also sets additional attributes on the new dataset.
+
             arguments
                 obj
                 path (1,1) string
@@ -145,8 +202,12 @@ classdef File < handle
         end
 
         function setRefAttr(obj, nodePath, attrName, target)
-            %SETREFATTR - Store an object reference in an attribute
-            %   ({"zarr_dtype":"object","value":{...}} form).
+        %setRefAttr - Store an object reference in an attribute
+        %   setRefAttr(obj, nodePath, attrName, target) sets the
+        %   attribute attrName of the node at nodePath to a reference
+        %   to target (a path or node), in the
+        %   {"zarr_dtype":"object","value":<record>} form.
+
             arguments
                 obj
                 nodePath (1,1) string
@@ -159,9 +220,12 @@ classdef File < handle
         end
 
         function ref = makeReference(obj, target)
-            %MAKEREFERENCE - Reference to a node (or path) with object ids.
-            %   The object_id of the target and of this store's root are
-            %   filled in when those nodes record one.
+        %makeReference - Reference to a node, with object ids filled in
+        %   ref = makeReference(obj, target) builds an
+        %   hdmf.zarr.Reference to target (a path or node); the object
+        %   ids of the target and of this store's root are filled in
+        %   when those nodes record one.
+
             node = obj.asNode(target);
             ref = hdmf.zarr.Reference(node.path);
             attributes = node.attrs;
@@ -175,8 +239,11 @@ classdef File < handle
         end
 
         function refresh(obj)
-            %REFRESH - Re-read the root after mutations.
-            %   Also refreshes consolidated metadata if this store carries it.
+        %refresh - Re-read the root after mutations
+        %   refresh(obj) re-opens the root group, refreshing
+        %   consolidated metadata first if this store carries it. The
+        %   write methods call this themselves.
+
             [bytes, found] = obj.store.get("zarr.json");
             if found
                 txt = native2unicode(bytes, 'UTF-8');
@@ -188,7 +255,11 @@ classdef File < handle
         end
 
         function specPath = specLoc(obj)
-            %SPECLOC - Path of the cached specifications group ("" if absent).
+        %specLoc - Path of the cached specifications group ("" if absent)
+        %   specPath = specLoc(obj) returns the value of the root
+        %   ".specloc" attribute, which names the group holding cached
+        %   format specifications ("" when the store records none).
+
             attributes = obj.root.attrs;
             if isfield(attributes, specLocField())
                 specPath = string(char(attributes.(specLocField())));
@@ -200,7 +271,8 @@ classdef File < handle
 
     methods (Access = private)
         function node = asNode(obj, nodeOrPath)
-            %ASNODE - A zarr node as given, or resolved from a path.
+        %asNode - A zarr node as given, or resolved from a path
+
             if isa(nodeOrPath, 'zarr.Group') || isa(nodeOrPath, 'zarr.Array')
                 node = nodeOrPath;
             else
@@ -211,7 +283,8 @@ classdef File < handle
 end
 
 function fieldName = specLocField()
-%SPECLOCFIELD - Struct field under which jsondecode stores ".specloc".
+%specLocField - Struct field under which jsondecode stores ".specloc"
 %   '.specloc' is not a valid struct field name; jsondecode normalizes it.
+
 fieldName = matlab.lang.makeValidName('.specloc');
 end

@@ -1,16 +1,22 @@
 function node = resolve(root, target)
-%RESOLVE - Open the node a path or reference points to, following links.
-%   node = hdmf.zarr.resolve(root, "general/devices/probe0")
-%   node = hdmf.zarr.resolve(root, hdmf.zarr.Reference(...))
+%resolve - Open the node a path or reference points to, following links
+%   node = resolve(root, target) walks target from root (the
+%   zarr.Group at the top of the store) and returns the node it ends
+%   at. target is a path ("general/devices/probe0") or a scalar
+%   hdmf.zarr.Reference.
 %
-%   root is the zarr.Group at the top of the store. Each path segment may
-%   be a real child of the current group or the name of one of its
-%   zarr_link entries; a link restarts resolution at its target path from
-%   root. Only in-store targets are supported: external links and
-%   references (Source ~= ".") raise hdmf:UnsupportedFeature.
+%   Each path segment may be a real child of the current group or the
+%   name of one of that group's zarr_link entries -- links are
+%   followed transparently, so a linked node can be addressed as if it
+%   were an ordinary child. A link restarts resolution at its target
+%   path from root. Only in-store targets are supported: external
+%   links and references raise hdmf:UnsupportedFeature.
 %
-%   This is the store-dependent counterpart of hdmf.zarr.Reference /
-%   hdmf.zarr.Link; hdmf.zarr.File.resolve is a thin wrapper around it.
+%   This is the store-bound counterpart of hdmf.zarr.Reference and
+%   hdmf.zarr.Link; hdmf.zarr.File.resolve is a thin wrapper around
+%   it, and hdmf.zarr.File.derefAll handles Reference arrays.
+%
+%   See also hdmf.zarr.File, hdmf.zarr.Reference, hdmf.zarr.Link
 
 arguments
     root (1,1) zarr.Group
@@ -45,7 +51,8 @@ end
 end
 
 function node = followLink(root, group, name)
-%FOLLOWLINK - Resolve the link called name in group, from root.
+%followLink - Resolve the link called name in group, from root
+
 links = hdmf.zarr.Link.fromAttributes(group.attrs);
 link = hdmf.zarr.Link.empty(1, 0);
 for i = 1:numel(links)
@@ -66,9 +73,10 @@ node = hdmf.zarr.resolve(root, link.Target);
 end
 
 function mustBeResolveTarget(target)
-%MUSTBERESOLVETARGET - One path (text scalar) or one Reference.
-%   A Reference array is rejected rather than silently resolving its first
-%   element; use hdmf.zarr.File.derefAll for arrays.
+%mustBeResolveTarget - One path (text scalar) or one Reference
+%   A Reference array is rejected rather than silently resolving its
+%   first element; use hdmf.zarr.File.derefAll for arrays.
+
 if isa(target, 'hdmf.zarr.Reference')
     if ~isscalar(target)
         error("hdmf:ResolveError", ...
