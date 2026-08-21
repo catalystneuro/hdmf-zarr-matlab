@@ -37,8 +37,9 @@ classdef TestConventions < matlab.unittest.TestCase
             tc.verifyTrue(contains(dev.path, "devices/probe0"));
             % links() surfaces it explicitly
             L = f.links("general/extracellular_ephys/shank0");
-            tc.verifyEqual(L(1).name, "device");
-            tc.verifyEqual(L(1).source, ".");
+            tc.verifyClass(L, 'hdmf.zarr.Link');
+            tc.verifyEqual(L(1).Name, "device");
+            tc.verifyEqual(L(1).Target.Source, ".");
         end
 
         function attributeReferenceDereferences(tc)
@@ -55,7 +56,7 @@ classdef TestConventions < matlab.unittest.TestCase
         function datasetReferencesDereference(tc)
             f = hdmf.zarr.open(tc.fixture);
             col = f.resolve("general/extracellular_ephys/electrodes/group");
-            tc.verifyTrue(f.isRefArray(col));
+            tc.verifyTrue(hdmf.zarr.isReferenceArray(col));
             groups = f.derefAll(col);
             tc.verifyEqual(numel(groups), 4);
             for i = 1:numel(groups)

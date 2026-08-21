@@ -39,9 +39,10 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             dev = f.resolve("acquisition/device");
             tc.verifyEqual(string(char(dev.attrs.neurodata_type)), "Device");
             L = f.links("acquisition");
-            tc.verifyEqual(L(1).name, "device");
-            tc.verifyEqual(L(1).source, ".");
-            tc.verifyEqual(L(1).path, "/general/devices/probe0");
+            tc.verifyEqual(L(1).Name, "device");
+            tc.verifyEqual(L(1).Target.Source, ".");
+            tc.verifyEqual(L(1).Target.Path, "/general/devices/probe0");
+            tc.verifyEqual(L(1).Target.ObjectId, "dev-oid-1");
         end
 
         function singleLinkSerializesAsList(tc)
@@ -52,12 +53,25 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             tc.verifySubstring(txt, '"zarr_link":[{');   % list, not object
         end
 
+        function compoundDtypeHintIsNotAReferenceArray(tc)
+            % hdmf-zarr tags a compound dataset with a zarr_dtype LIST of
+            % per-field descriptors; the predicate must answer false, not
+            % choke on the non-text attribute.
+            [~, store] = TestWriteConventions.freshFile(fullfile(tc.work, "e.zarr"));
+            fieldHints = {struct('name', 'x', 'dtype', 'int32'), ...
+                struct('name', 'ts', 'dtype', 'object')};
+            arr = zarr.create(store, 2, "string", Path="acquisition/compound_ish", ...
+                Attributes=struct('zarr_dtype', {fieldHints}));
+            tc.verifyFalse(hdmf.zarr.isReferenceArray(arr));
+            tc.verifyFalse(hdmf.zarr.isReferenceArray(struct('attrs', 1)));
+        end
+
         function refDatasetRoundTrip(tc)
             [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "c.zarr"));
             f.writeRefs("acquisition/ts/electrodes_ish", ...
                 ["general/devices/probe0", "acquisition/ts/data"]);
             col = f.resolve("acquisition/ts/electrodes_ish");
-            tc.verifyTrue(f.isRefArray(col));
+            tc.verifyTrue(hdmf.zarr.isReferenceArray(col));
             nodes = f.derefAll(col);
             tc.verifyEqual(string(char(nodes{1}.attrs.object_id)), "dev-oid-1");
             tc.verifyClass(nodes{2}, 'zarr.Array');
@@ -73,6 +87,58 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             node = f.resolve("acquisition/ts/data");
             target = f.deref(node.attrs.table);
             tc.verifyEqual(string(char(target.attrs.object_id)), "dev-oid-1");
+        end
+
+        function missingChildRaisesResolveError(tc)
+            [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "f.zarr"));
+            % a group with no zarr_link at all, and one with an empty list
+            zarr.create_group(f.store, Path="emptylinks", ...
+                Attributes=struct('zarr_link', []));
+            f.refresh();
+            tc.verifyError(@() f.resolve("general/nope"), "hdmf:ResolveError");
+            tc.verifyError(@() f.resolve("emptylinks/nope"), "hdmf:ResolveError");
+            tc.verifySize(f.links("emptylinks"), [1 0]);
+            % and the empty list does not block adding the first link
+            f.addLink("emptylinks", "device", "general/devices/probe0");
+            tc.verifyEqual(f.links("emptylinks").Name, "device");
+        end
+
+        function addLinkPreservesForeignRecords(tc)
+            [f, store] = TestWriteConventions.freshFile(fullfile(tc.work, "g.zarr"));
+            foreign = struct('name', 'other', 'source', '.', 'path', '/acquisition/ts/data', ...
+                'object_id', [], 'extra', 'keep me');
+            zarr.create_group(store, Path="withforeign", ...
+                Attributes=struct('zarr_link', {{foreign}}));
+            f.refresh();
+            f.addLink("withforeign", "device", "general/devices/probe0");
+            group = f.resolve("withforeign");
+            raw = group.attrs.zarr_link;
+            if isstruct(raw), raw = num2cell(raw); end
+            tc.verifyEqual(numel(raw), 2);
+            tc.verifyEqual(raw{1}.extra, 'keep me');   % untouched, not re-encoded
+            tc.verifyTrue(isfield(raw{1}, 'object_id'));
+            tc.verifyEqual(raw{2}.name, 'device');
+            % and both links still resolve
+            tc.verifyClass(f.resolve("withforeign/other"), 'zarr.Array');
+            tc.verifyClass(f.resolve("withforeign/device"), 'zarr.Group');
+        end
+
+        function resolveRejectsReferenceArrays(tc)
+            [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "h.zarr"));
+            refs = [hdmf.zarr.Reference("general"), hdmf.zarr.Reference("/")];
+            tc.verifyError(@() f.resolve(refs), "hdmf:ResolveError");
+            tc.verifyError(@() f.deref(refs), "hdmf:ResolveError");
+            tc.verifySize(f.derefAll(refs), [1 2]);   % the array entry point
+        end
+
+        function derefAllResolvesRepeatedTargets(tc)
+            [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "i.zarr"));
+            targets = repmat(["general/devices/probe0", "acquisition/ts/data"], 1, 3);
+            f.writeRefs("acquisition/ts/many", targets);
+            nodes = f.derefAll(f.resolve("acquisition/ts/many"));
+            tc.verifySize(nodes, [6 1]);
+            tc.verifyEqual(cellfun(@(n) string(n.path), nodes), ...
+                repmat(["general/devices/probe0"; "acquisition/ts/data"], 3, 1));
         end
 
         function writesSurviveConsolidation(tc)
