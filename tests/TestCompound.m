@@ -1,0 +1,234 @@
+classdef TestCompound < matlab.unittest.TestCase
+    %Compound datasets: the field layout and its reference fields.
+    %
+    %   Reading is checked against a fixture written by hdmf-zarr itself
+    %   (tools/make_compound_fixture.py), so what the conventions layer
+    %   claims about the on-disk shape is checked against the shape
+    %   hdmf-zarr actually writes. Writing is checked by round-trip here
+    %   and, in CI, by hdmf-zarr reading a MATLAB-written store back.
+
+    properties
+        fixture
+    end
+
+    methods (TestClassSetup)
+        function findOrMakeFixture(tc)
+            root = fileparts(fileparts(mfilename('fullpath')));
+            tc.fixture = fullfile(root, 'scratch', 'fixture.compound.zarr');
+            if ~isfolder(tc.fixture)
+                py = fullfile(root, '.venv', 'bin', 'python');
+                if ~isfile(py)
+                    tc.assumeFail('fixture missing and no .venv to generate it');
+                end
+                status = system(sprintf('cd "%s" && "%s" tools/make_compound_fixture.py "%s"', ...
+                    root, py, tc.fixture));
+                tc.assumeEqual(status, 0, 'fixture generation failed');
+            end
+        end
+    end
+
+    methods (Test)
+        % ------------------------------------------------------------------
+        % Reading what hdmf-zarr wrote
+
+        function readsPlainCompound(tc)
+            f = hdmf.zarr.open(tc.fixture);
+            [records, dtype] = f.readCompound("plain_compound");
+            tc.verifyEqual(dtype.Names, ["id", "name"]);
+            tc.verifyEqual(dtype.isReferenceField(), [false false]);
+            tc.verifyEqual([records.id], int32([1 2 3]));
+            tc.verifyEqual([records.name], ["Allen", "Bob", "Mike"]);
+        end
+
+        function readsReferenceFieldsAsReferences(tc)
+            f = hdmf.zarr.open(tc.fixture);
+            [records, dtype] = f.readCompound("ref_compound");
+            tc.verifyEqual(dtype.Types, ["int32", "str_", "object"]);
+            tc.verifyEqual(dtype.isReferenceField(), [false false true]);
+            tc.verifyClass(records(1).reference, 'hdmf.zarr.Reference');
+            tc.verifyEqual([records.name], ["dataset_1", "dataset_2"]);
+            tc.verifyEqual(records(1).reference.Path, "/dataset_1");
+            tc.verifyEqual(records(2).reference.Path, "/dataset_2");
+            % hdmf-zarr writes JSON null for ids it does not have; those
+            % decode to "" rather than to the text "null".
+            tc.verifyEqual(records(1).reference.ObjectId, "");
+        end
+
+        function referenceFieldDereferences(tc)
+            f = hdmf.zarr.open(tc.fixture);
+            records = f.readCompound("ref_compound");
+            targets = f.derefAll([records.reference]);
+            tc.verifyEqual(size(targets{1}), [2 5]);
+            tc.verifyEqual(size(targets{2}), [4 5]);
+            % numpy's arange gives the fixture int64 data; the point here
+            % is which array the reference reached, not its element type.
+            values = double(targets{2}.read());
+            tc.verifyEqual(values(1, :), 0:10:40);
+        end
+
+        function readCompoundRejectsNonCompound(tc)
+            f = hdmf.zarr.open(tc.fixture);
+            tc.verifyFalse(hdmf.zarr.isCompoundDataset(f.resolve("dataset_1")));
+            tc.verifyError(@() f.readCompound("dataset_1"), "hdmf:NotCompoundDataset");
+        end
+
+        function predicatesTellCompoundFromReferenceDataset(tc)
+            % A reference dataset and a compound dataset both carry a
+            % zarr_dtype; only the compound one carries a list of fields.
+            f = hdmf.zarr.open(tc.fixture);
+            compound = f.resolve("ref_compound");
+            tc.verifyTrue(hdmf.zarr.isCompoundDataset(compound));
+            tc.verifyFalse(hdmf.zarr.isReferenceArray(compound));
+        end
+
+        % ------------------------------------------------------------------
+        % Writing, and reading back what we wrote
+
+        function writeCompoundRoundTrips(tc)
+            f = tc.newStore();
+            records = struct( ...
+                'id', {int32(1); int32(2)}, ...
+                'weight', {1.5; -2.25}, ...
+                'label', {"alpha"; "beta"}, ...
+                'device', {f.makeReference("devices/probe0"); f.makeReference("devices/probe1")});
+            f.writeCompound("table", records);
+
+            [back, dtype] = f.readCompound("table");
+            tc.verifyEqual(dtype.Types, ["int32", "float64", "str_", "object"]);
+            tc.verifyEqual([back.id], int32([1 2]));
+            tc.verifyEqual([back.weight], [1.5 -2.25]);
+            tc.verifyEqual([back.label], ["alpha", "beta"]);
+            tc.verifyEqual(back(2).device.Path, "/devices/probe1");
+            % makeReference fills in the object ids the targets record.
+            tc.verifyEqual(back(1).device.ObjectId, "probe0-oid");
+            tc.verifyEqual(back(1).device.SourceObjectId, "root-oid");
+        end
+
+        function writeCompoundAcceptsPathsAsReferences(tc)
+            % A reference field given as paths needs a declared layout:
+            % text and references are indistinguishable in the data.
+            f = tc.newStore();
+            records = struct('id', {int32(1); int32(2)}, ...
+                'device', {"devices/probe0"; "devices/probe1"});
+            dtype = hdmf.zarr.CompoundDtype(["id", "device"], ["int32", "object"]);
+            f.writeCompound("table", records, Dtype=dtype);
+
+            back = f.readCompound("table");
+            tc.verifyClass(back(1).device, 'hdmf.zarr.Reference');
+            tc.verifyEqual(back(1).device.Path, "/devices/probe0");
+        end
+
+        function writeCompoundStoresSpecShapedMetadata(tc)
+            f = tc.newStore();
+            records = struct('id', {int32(7)}, 'device', {f.makeReference("devices/probe0")});
+            node = f.writeCompound("table", records);
+
+            % zarr_dtype is a LIST of {name, dtype} records even for one
+            % field, and reference fields are typed "object" there while
+            % being stored as ordinary fixed-length text.
+            meta = jsondecode(fileread(fullfile(node.store.root, "table", "zarr.json")));
+            tc.verifyEqual(string(meta.data_type.name), "struct");
+            tc.verifySize(meta.attributes.zarr_dtype, [2 1]);
+            tc.verifyEqual(string(meta.attributes.zarr_dtype(2).dtype), "object");
+            tc.verifyEqual(string(meta.data_type.configuration.fields(2).data_type.name), ...
+                "fixed_length_utf32");
+        end
+
+        function writeCompoundSizesTextToFitWithHeadroom(tc)
+            % Fields are never narrower than hdmf-zarr's minimum, and widen
+            % to fit a value longer than it.
+            f = tc.newStore();
+            long = string(repmat('x', 1, 700));
+            records = struct('label', {"short"; long});
+            node = f.writeCompound("table", records);
+
+            meta = jsondecode(fileread(fullfile(node.store.root, "table", "zarr.json")));
+            tc.verifyEqual(meta.data_type.configuration.fields(1).data_type.configuration.length_bytes, ...
+                4 * 700);
+            back = f.readCompound("table");
+            tc.verifyEqual(back(2).label, long);
+        end
+
+        function writeCompoundRejectsUndeclaredField(tc)
+            f = tc.newStore();
+            records = struct('id', {int32(1)});
+            dtype = hdmf.zarr.CompoundDtype(["id", "missing"], ["int32", "int32"]);
+            tc.verifyError(@() f.writeCompound("table", records, Dtype=dtype), ...
+                "hdmf:InvalidCompoundData");
+        end
+
+        function writeCompoundRejectsEmptyData(tc)
+            f = tc.newStore();
+            tc.verifyError(@() f.writeCompound("table", struct('id', {})), ...
+                "hdmf:InvalidCompoundData");
+        end
+
+        % ------------------------------------------------------------------
+        % CompoundDtype on its own
+
+        function dtypeDecodesAttributeList(tc)
+            value = {struct('name', 'id', 'dtype', 'int32'), ...
+                     struct('name', 'ref', 'dtype', 'object')};
+            dtype = hdmf.zarr.CompoundDtype.decode(value);
+            tc.verifyEqual(dtype.Names, ["id", "ref"]);
+            tc.verifyEqual(dtype.isReferenceField(), [false true]);
+        end
+
+        function dtypeDecodesStructArrayForm(tc)
+            % jsondecode returns a struct array when the entries share keys.
+            value = struct('name', {'id'; 'name'}, 'dtype', {'int32'; 'str_'});
+            dtype = hdmf.zarr.CompoundDtype.decode(value);
+            tc.verifyEqual(dtype.Names, ["id", "name"]);
+        end
+
+        function dtypeRejectsPlainReferenceDtype(tc)
+            % What a (non-compound) reference dataset carries instead.
+            tc.verifyError(@() hdmf.zarr.CompoundDtype.decode('object'), ...
+                "hdmf:InvalidCompoundDtype");
+        end
+
+        function dtypeRejectsMismatchedLengths(tc)
+            tc.verifyError(@() hdmf.zarr.CompoundDtype(["a", "b"], "int32"), ...
+                "hdmf:InvalidCompoundDtype");
+        end
+
+        function dtypeEncodesAttributeAsList(tc)
+            dtype = hdmf.zarr.CompoundDtype("id", "int32");
+            value = dtype.encodeAttribute();
+            tc.verifyClass(value, 'cell');
+            tc.verifyEqual(string(jsonencode(value)), "[{""name"":""id"",""dtype"":""int32""}]");
+        end
+
+        function dtypeSizesReferenceFieldsByEncodedRecord(tc)
+            % A reference is measured as the JSON record it becomes, not as
+            % the path it points at.
+            longPath = "/" + string(repmat('d', 1, 600));
+            records = struct('ref', {hdmf.zarr.Reference(longPath)});
+            dtype = hdmf.zarr.CompoundDtype.fromData(records);
+            tc.verifyEqual(dtype.Types, "object");
+            tc.verifyGreaterThan(dtype.StringChars, 600);
+        end
+
+        function dtypeRejectsUnsupportedFieldClass(tc)
+            records = struct('bad', {{1, 2}});
+            tc.verifyError(@() hdmf.zarr.CompoundDtype.fromData(records), ...
+                "hdmf:InvalidCompoundDtype");
+        end
+    end
+
+    methods (Access = private)
+        function f = newStore(tc)
+        %newStore - An empty store with two referenceable target groups
+
+            import matlab.unittest.fixtures.TemporaryFolderFixture
+            tempFixture = tc.applyFixture(TemporaryFolderFixture);
+            store = zarr.stores.LocalStore(fullfile(tempFixture.Folder, "store.zarr"));
+            zarr.create_group(store, Attributes=struct('object_id', 'root-oid'));
+            zarr.create_group(store, Path="devices/probe0", ...
+                Attributes=struct('object_id', 'probe0-oid'));
+            zarr.create_group(store, Path="devices/probe1", ...
+                Attributes=struct('object_id', 'probe1-oid'));
+            f = hdmf.zarr.open(store);
+        end
+    end
+end

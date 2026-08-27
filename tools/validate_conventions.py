@@ -36,9 +36,29 @@ def main(root):
     assert table["zarr_dtype"] == "object"
     assert table["value"]["path"] == "/general/devices/probe0"
 
+    # compound dataset: a "struct" data_type whose zarr_dtype is a LIST of
+    # per-field types, with reference fields typed "object" there while
+    # being stored as ordinary fixed-length text holding JSON records
+    compound = g["acquisition"]["ts"]["compound"]
+    field_types = compound.attrs["zarr_dtype"]
+    assert isinstance(field_types, list), f"zarr_dtype is {type(field_types)}, not list"
+    assert [f["name"] for f in field_types] == ["id", "name", "reference"]
+    assert field_types[0]["dtype"] == "int32"
+    assert field_types[2]["dtype"] == "object"
+    assert compound.dtype.names == ("id", "name", "reference"), compound.dtype
+    # hdmf-zarr's minimum text capacity, so rows can be appended later
+    assert compound.dtype["reference"].itemsize >= 512 * 4, compound.dtype["reference"]
+    rows = compound[:]
+    assert rows["id"].tolist() == [1, 2]
+    assert list(rows["name"]) == ["probe0", "series"]
+    ref = json.loads(str(rows["reference"][0]))
+    assert ref["source"] == "." and ref["path"] == "/general/devices/probe0"
+    assert ref["object_id"] == "dev-oid-1"
+
     # consolidated metadata still valid after MATLAB writes
     assert g.metadata.consolidated_metadata is not None
-    print("conventions validated: links, dataset refs, attribute refs, consolidation")
+    print("conventions validated: links, dataset refs, attribute refs, "
+          "compound datasets, consolidation")
 
 
 if __name__ == "__main__":

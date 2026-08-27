@@ -18,9 +18,11 @@ classdef File < handle
 %       resolve       - Open the node at a path or Reference
 %       deref         - Resolve a reference to its node
 %       derefAll      - Dereference a whole reference dataset
+%       readCompound  - Read a compound dataset, references decoded
 %       links         - zarr_link entries of a group, as a Link array
 %       addLink       - Add a soft link to a group
 %       writeRefs     - Create a reference dataset
+%       writeCompound - Create a compound dataset
 %       setRefAttr    - Store an object reference in an attribute
 %       makeReference - Reference to a node, with object ids filled in
 %       refresh       - Re-read the root after mutations
@@ -133,6 +135,41 @@ classdef File < handle
             nodes = reshape(uniqueNodes(pathIndex), size(refs));
         end
 
+        function [records, dtype] = readCompound(obj, target)
+        %readCompound - Read a compound dataset, references decoded
+        %   records = readCompound(obj, target) reads the compound
+        %   dataset at target (a path or a zarr.Array) and returns its
+        %   rows as a struct array with one field per record field.
+        %   Fields that hold object references come back as
+        %   hdmf.zarr.Reference arrays rather than as the JSON text
+        %   they are stored as; every other field keeps the class its
+        %   Zarr type gives it. Convert the result with struct2table
+        %   if a table suits the caller better.
+        %
+        %   [records, dtype] = readCompound(obj, target) also returns
+        %   the field layout as an hdmf.zarr.CompoundDtype, which says
+        %   which fields hold references.
+        %
+        %   To open what a reference field points at, pass the column
+        %   to derefAll: derefAll(f, [records.electrode]).
+
+            node = obj.asNode(target);
+            if ~hdmf.zarr.isCompoundDataset(node)
+                error("hdmf:NotCompoundDataset", ...
+                    "Dataset '%s' has data type '%s', not a compound (structured) type.", ...
+                    node.path, node.dtype);
+            end
+            records = node.read();
+            dtype = compoundDtypeOf(node, records);
+            referenceFields = dtype.Names(dtype.isReferenceField());
+            for name = referenceFields
+                values = hdmf.zarr.Reference.decode([records.(name)]);
+                for i = 1:numel(records)
+                    records(i).(name) = values(i);
+                end
+            end
+        end
+
         % ------------------------------------------------------------------
         % Write side: create links and references per the conventions.
 
@@ -209,6 +246,56 @@ classdef File < handle
             obj.refresh();
         end
 
+        function compoundDataset = writeCompound(obj, path, records, opts)
+        %writeCompound - Create a compound dataset
+        %   compoundDataset = writeCompound(obj, path, records) writes
+        %   the struct array records as a compound dataset at path, one
+        %   record per element. Field types are read off the data:
+        %   numeric and logical fields keep their class, text becomes a
+        %   string field, and fields of hdmf.zarr.Reference (or of
+        %   paths or nodes, which are turned into references to this
+        %   store) become reference fields. Text and reference fields
+        %   are sized to the longest value they hold, with hdmf-zarr's
+        %   minimum of 512 characters as a floor so that rows can be
+        %   appended later.
+        %
+        %   writeCompound(obj, path, records, Dtype=dtype) instead
+        %   takes the field layout from an hdmf.zarr.CompoundDtype. Use
+        %   it when the data alone does not pin the types down -- to
+        %   store MATLAB doubles as float32, say, or to declare a
+        %   reference field whose rows are given as paths.
+        %
+        %   writeCompound(obj, path, records, Attributes=attrs) also
+        %   sets additional attributes on the new dataset.
+
+            arguments
+                obj
+                path (1,1) string
+                records struct
+                opts.Dtype hdmf.zarr.CompoundDtype {mustBeScalarOrEmpty} = ...
+                    hdmf.zarr.CompoundDtype.empty
+                opts.Attributes struct = struct()
+            end
+            if isempty(records)
+                error("hdmf:InvalidCompoundData", ...
+                    "Cannot write an empty compound dataset at '%s'.", path);
+            end
+            records = obj.resolveReferenceFields(reshape(records, [], 1));
+            if isempty(opts.Dtype)
+                dtype = hdmf.zarr.CompoundDtype.fromData(records);
+            else
+                dtype = opts.Dtype;
+            end
+            stored = obj.encodeCompoundRows(records, dtype);
+
+            attributes = opts.Attributes;
+            attributes.zarr_dtype = dtype.encodeAttribute();
+            compoundDataset = zarr.create(obj.store, numel(stored), dtype.encodeDataType(), ...
+                Path=path, Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attributes);
+            compoundDataset.write(stored);
+            obj.refresh();
+        end
+
         function setRefAttr(obj, nodePath, attrName, target)
         %setRefAttr - Store an object reference in an attribute
         %   setRefAttr(obj, nodePath, attrName, target) sets the
@@ -278,6 +365,57 @@ classdef File < handle
     end
 
     methods (Access = private)
+        function records = resolveReferenceFields(obj, records)
+        %resolveReferenceFields - Turn path/node reference fields into References
+        %   Only fields already holding hdmf.zarr.Reference are left
+        %   alone; a field of paths or nodes cannot be told apart from a
+        %   field of text without a declared layout, so this is used only
+        %   to infer one, never to reinterpret a declared "str_" field.
+
+            for name = string(fieldnames(records))'
+                if isa(records(1).(name), 'hdmf.zarr.Reference')
+                    continue
+                end
+                if isa(records(1).(name), 'zarr.Group') || isa(records(1).(name), 'zarr.Array')
+                    for i = 1:numel(records)
+                        records(i).(name) = obj.makeReference(records(i).(name));
+                    end
+                end
+            end
+        end
+
+        function stored = encodeCompoundRows(obj, records, dtype)
+        %encodeCompoundRows - Rows in the form the Zarr record type takes
+        %   Reference fields become their JSON records and text fields
+        %   string scalars, so that every field is a value the array's
+        %   own data type can encode.
+
+            missingFields = setdiff(dtype.Names, string(fieldnames(records))');
+            if ~isempty(missingFields)
+                error("hdmf:InvalidCompoundData", ...
+                    "The data has no field '%s', which the compound dtype declares.", ...
+                    missingFields(1));
+            end
+            isReference = dtype.isReferenceField();
+            stored = struct();
+            for k = 1:numel(dtype.Names)
+                name = dtype.Names(k);
+                for i = 1:numel(records)
+                    value = records(i).(name);
+                    if isReference(k)
+                        if ~isa(value, 'hdmf.zarr.Reference')
+                            value = obj.makeReference(value);
+                        end
+                        stored(i, 1).(name) = value.encodeJson();
+                    elseif isstring(value) || ischar(value)
+                        stored(i, 1).(name) = string(value);
+                    else
+                        stored(i, 1).(name) = value;
+                    end
+                end
+            end
+        end
+
         function node = asNode(obj, nodeOrPath)
         %asNode - A zarr node as given, or resolved from a path
 
@@ -290,3 +428,23 @@ classdef File < handle
     end
 end
 
+function dtype = compoundDtypeOf(node, records)
+%compoundDtypeOf - Field layout of a compound dataset that has been read
+%   zarr_dtype is what marks a field as holding object references, so a
+%   dataset written without it (by something other than hdmf-zarr) is
+%   read as plain fields: its Zarr types already say what the values
+%   are, and nothing claims any of them is a reference.
+
+attributes = node.attrs;
+if isfield(attributes, 'zarr_dtype')
+    dtype = hdmf.zarr.CompoundDtype.decode(attributes.zarr_dtype);
+    fieldNames = string(fieldnames(records))';
+    if ~isequal(sort(dtype.Names), sort(fieldNames))
+        error("hdmf:InvalidCompoundDtype", ...
+            "zarr_dtype of '%s' names fields %s, but the record type has %s.", ...
+            node.path, strjoin(dtype.Names, ", "), strjoin(fieldNames, ", "));
+    end
+    return
+end
+dtype = hdmf.zarr.CompoundDtype.fromData(records);
+end
