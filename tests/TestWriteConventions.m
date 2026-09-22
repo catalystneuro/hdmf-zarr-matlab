@@ -37,7 +37,7 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "a.zarr"));
             f.addLink("acquisition", "device", "general/devices/probe0");
             dev = f.resolve("acquisition/device");
-            tc.verifyEqual(string(char(dev.attrs.neurodata_type)), "Device");
+            tc.verifyEqual(dev.attrs{"neurodata_type"}, "Device");
             L = f.links("acquisition");
             tc.verifyEqual(L(1).Name, "device");
             tc.verifyEqual(L(1).Target.Source, ".");
@@ -73,7 +73,7 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             col = f.resolve("acquisition/ts/electrodes_ish");
             tc.verifyTrue(hdmf.zarr.isReferenceArray(col));
             nodes = f.derefAll(col);
-            tc.verifyEqual(string(char(nodes{1}.attrs.object_id)), "dev-oid-1");
+            tc.verifyEqual(nodes{1}.attrs{"object_id"}, "dev-oid-1");
             tc.verifyClass(nodes{2}, 'zarr.Array');
             % object ids recorded per convention
             r = jsondecode(char(subsref(col.read(), substruct('()', {1}))));
@@ -85,8 +85,8 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             [f, ~] = TestWriteConventions.freshFile(fullfile(tc.work, "d.zarr"));
             f.setRefAttr("acquisition/ts/data", "table", "general/devices/probe0");
             node = f.resolve("acquisition/ts/data");
-            target = f.deref(node.attrs.table);
-            tc.verifyEqual(string(char(target.attrs.object_id)), "dev-oid-1");
+            target = f.deref(node.attrs{"table"});
+            tc.verifyEqual(target.attrs{"object_id"}, "dev-oid-1");
         end
 
         function missingChildRaisesResolveError(tc)
@@ -112,12 +112,12 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             f.refresh();
             f.addLink("withforeign", "device", "general/devices/probe0");
             group = f.resolve("withforeign");
-            raw = group.attrs.zarr_link;
-            if isstruct(raw), raw = num2cell(raw); end
+            % A JSON list of objects reads back as a cell of dictionaries.
+            raw = group.attrs{"zarr_link"};
             tc.verifyEqual(numel(raw), 2);
-            tc.verifyEqual(raw{1}.extra, 'keep me');   % untouched, not re-encoded
-            tc.verifyTrue(isfield(raw{1}, 'object_id'));
-            tc.verifyEqual(raw{2}.name, 'device');
+            tc.verifyEqual(raw{1}{"extra"}, "keep me");   % untouched, not re-encoded
+            tc.verifyTrue(isKey(raw{1}, "object_id"), 'a null field survives');
+            tc.verifyEqual(raw{2}{"name"}, "device");
             % and both links still resolve
             tc.verifyClass(f.resolve("withforeign/other"), 'zarr.Array');
             tc.verifyClass(f.resolve("withforeign/device"), 'zarr.Group');
@@ -150,7 +150,7 @@ classdef TestWriteConventions < matlab.unittest.TestCase
             % a brand-new File (fresh consolidated view) must see the link
             f2 = hdmf.zarr.open(root);
             dev = f2.resolve("acquisition/device");
-            tc.verifyEqual(string(char(dev.attrs.neurodata_type)), "Device");
+            tc.verifyEqual(dev.attrs{"neurodata_type"}, "Device");
         end
     end
 end

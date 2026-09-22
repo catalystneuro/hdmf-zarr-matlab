@@ -170,20 +170,29 @@ classdef Reference
         function refs = decode(value)
         %decode - Parse reference(s) from any on-disk shape
         %   refs = decode(value) parses JSON string(s) (string array or
-        %   char), attribute-form structs {zarr_dtype, value}, bare
-        %   record structs, or a cell of either (what jsondecode returns
-        %   for a list of records with differing fields), and returns a
-        %   Reference array shaped like the input -- e.g.
-        %   decode(node.read()) for a reference dataset, or
-        %   decode(group.attrs.table) for a reference attribute. Raises
-        %   hdmf:InvalidReference for anything that is not a reference
-        %   record, naming the offending element.
+        %   char), attribute-form records {zarr_dtype, value}, bare
+        %   records, or a cell of either, and returns a Reference array
+        %   shaped like the input -- e.g. decode(node.read()) for a
+        %   reference dataset, or decode(group.attrs{"table"}) for a
+        %   reference attribute. A record is a dictionary when it came
+        %   from a store and a scalar struct when it was built in
+        %   MATLAB; both are accepted. Raises hdmf:InvalidReference for
+        %   anything that is not a reference record, naming the
+        %   offending element.
 
             arguments
-                value {mustBeA(value, ["string", "char", "struct", "cell"])}
+                value {mustBeA(value, ["string", "char", "struct", "cell", "dictionary"])}
             end
             if ischar(value)
                 value = string(value);
+            end
+            if isa(value, 'dictionary')
+                % A dictionary is one record. It is also 1x1, so the loop
+                % below would reach it -- but value(1) on a dictionary looks
+                % up the key 1 rather than indexing an element, so it has to
+                % be taken before the loop.
+                refs = decodeOne(value);
+                return
             end
             refs = repmat(hdmf.zarr.Reference(), size(value));
             for i = 1:numel(value)
@@ -238,20 +247,24 @@ end
 function ref = decodeOne(s)
 %decodeOne - Reference from one decoded record (bare or attribute form)
 
-if ~isstruct(s) || ~isscalar(s)
+if ~hdmf.zarr.internal.isRecord(s)
     error("hdmf:InvalidReference", ...
         "Expected a reference record (JSON object), got %s.", class(s));
 end
-if isfield(s, 'zarr_dtype') && isfield(s, 'value')
-    s = s.value;   % attribute form
-    if ~isstruct(s)
+hasDtype = hdmf.zarr.internal.recordField(s, 'zarr_dtype');
+[hasValue, inner] = hdmf.zarr.internal.recordField(s, 'value');
+if hasDtype && hasValue
+    s = inner;   % attribute form
+    if ~hdmf.zarr.internal.isRecord(s)
         error("hdmf:InvalidReference", ...
             "Attribute value of zarr_dtype 'object' is not a record but %s.", class(s));
     end
 end
-if ~isfield(s, 'path')
+hasPath = hdmf.zarr.internal.recordField(s, 'path');
+if ~hasPath
     error("hdmf:InvalidReference", ...
-        "Reference record has no 'path' field (fields: %s).", strjoin(fieldnames(s), ", "));
+        "Reference record has no 'path' field (fields: %s).", ...
+        strjoin(recordFieldNames(s), ", "));
 end
 % Absent source means "path names another file" in hdmf-zarr: keep it
 % distinguishable from "." by storing "".
@@ -262,9 +275,21 @@ end
 function value = textField(s, name)
 %textField - Field of s as a string; "" when absent or JSON null ([])
 
-if isfield(s, name) && ~isempty(s.(name))
-    value = string(char(s.(name)));
+[found, raw] = hdmf.zarr.internal.recordField(s, name);
+if found && ~isempty(raw)
+    value = string(char(raw));
 else
     value = "";
 end
+end
+
+function names = recordFieldNames(s)
+%recordFieldNames - Field names of a record, for an error message
+
+if isa(s, 'dictionary')
+    names = keys(s);
+else
+    names = string(fieldnames(s));
+end
+names = reshape(names, 1, []);
 end

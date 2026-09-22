@@ -89,7 +89,7 @@ classdef File < handle
 
             arguments
                 obj
-                ref {mustBeA(ref, ["hdmf.zarr.Reference", "string", "char", "struct"])}
+                ref {mustBeA(ref, ["hdmf.zarr.Reference", "string", "char", "struct", "dictionary"])}
             end
             if ~isa(ref, 'hdmf.zarr.Reference')
                 ref = hdmf.zarr.Reference.decode(ref);
@@ -109,7 +109,8 @@ classdef File < handle
             arguments
                 obj
                 refArrayOrValues {mustBeA(refArrayOrValues, ...
-                    ["zarr.Array", "hdmf.zarr.Reference", "string", "char", "struct", "cell"])}
+                    ["zarr.Array", "hdmf.zarr.Reference", "string", "char", "struct", "cell", ...
+                     "dictionary"])}
             end
             refs = refArrayOrValues;
             if isa(refs, 'zarr.Array')
@@ -157,9 +158,12 @@ classdef File < handle
             % fields this library does not model.
             attributes = group.attrs;
             existing = {};
-            if isfield(attributes, 'zarr_link') && ~isempty(attributes.zarr_link)
-                existing = attributes.zarr_link;
-                if isstruct(existing)
+            [found, entries] = hdmf.zarr.internal.recordField(attributes, 'zarr_link');
+            if found && ~isempty(entries)
+                existing = entries;
+                if isa(existing, 'dictionary')
+                    existing = {existing};   % a lone record, not a list
+                elseif isstruct(existing)
                     existing = num2cell(existing);
                 end
                 existing = reshape(existing, 1, []);
@@ -183,7 +187,7 @@ classdef File < handle
                 obj
                 path (1,1) string
                 targets
-                opts.Attributes struct = struct()
+                opts.Attributes {mustBeA(opts.Attributes, ["struct", "dictionary"])} = struct()
             end
             if ~iscell(targets)
                 targets = num2cell(targets);
@@ -194,7 +198,11 @@ classdef File < handle
                 refs(i) = obj.makeReference(targets{i});
             end
             attributes = opts.Attributes;
-            attributes.zarr_dtype = 'object';
+            if isa(attributes, 'dictionary')
+                attributes("zarr_dtype") = {'object'};
+            else
+                attributes.zarr_dtype = 'object';
+            end
             refDataset = zarr.create(obj.store, numTargets, "string", Path=path, ...
                 Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attributes);
             refDataset(:) = refs.encodeJson();
@@ -228,13 +236,13 @@ classdef File < handle
 
             node = obj.asNode(target);
             ref = hdmf.zarr.Reference(node.path);
-            attributes = node.attrs;
-            if isfield(attributes, 'object_id')
-                ref.ObjectId = string(char(attributes.object_id));
+            [hasId, objectId] = hdmf.zarr.internal.recordField(node.attrs, 'object_id');
+            if hasId
+                ref.ObjectId = string(char(objectId));
             end
-            rootAttributes = obj.root.attrs;
-            if isfield(rootAttributes, 'object_id')
-                ref.SourceObjectId = string(char(rootAttributes.object_id));
+            [hasRootId, rootId] = hdmf.zarr.internal.recordField(obj.root.attrs, 'object_id');
+            if hasRootId
+                ref.SourceObjectId = string(char(rootId));
             end
         end
 
@@ -260,9 +268,9 @@ classdef File < handle
         %   ".specloc" attribute, which names the group holding cached
         %   format specifications ("" when the store records none).
 
-            attributes = obj.root.attrs;
-            if isfield(attributes, specLocField())
-                specPath = string(char(attributes.(specLocField())));
+            [found, value] = hdmf.zarr.internal.recordField(obj.root.attrs, ".specloc");
+            if found
+                specPath = string(char(value));
             else
                 specPath = "";
             end
@@ -282,9 +290,3 @@ classdef File < handle
     end
 end
 
-function fieldName = specLocField()
-%specLocField - Struct field under which jsondecode stores ".specloc"
-%   '.specloc' is not a valid struct field name; jsondecode normalizes it.
-
-fieldName = matlab.lang.makeValidName('.specloc');
-end
