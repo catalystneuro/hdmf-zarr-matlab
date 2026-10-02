@@ -12,7 +12,7 @@ function tf = isCompoundDataset(node)
 %   Read such a dataset with hdmf.zarr.File.readCompound, which
 %   decodes the fields that hold object references; take the field
 %   layout on its own with
-%   hdmf.zarr.CompoundDtype.decode(node.attrs.zarr_dtype).
+%   hdmf.zarr.CompoundDtype.decode(node.attrs{"zarr_dtype"}).
 %
 %   Like other is* predicates it accepts any value and answers false
 %   for anything that is not such a dataset -- including a plain

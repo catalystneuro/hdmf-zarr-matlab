@@ -155,12 +155,14 @@ classdef CompoundDtype
         function obj = decode(value)
         %decode - Layout from a zarr_dtype attribute value
         %   obj = decode(value) parses the list of {name, dtype}
-        %   records hdmf-zarr writes to zarr_dtype -- as jsondecode
-        %   returns it, so a struct array or a cell array of structs --
-        %   e.g. decode(node.attrs.zarr_dtype). Raises
-        %   hdmf:InvalidCompoundDtype for a zarr_dtype that is not such
-        %   a list, including the plain "object" of a (non-compound)
-        %   reference dataset.
+        %   records hdmf-zarr writes to zarr_dtype, e.g.
+        %   decode(node.attrs{"zarr_dtype"}). Read from a store, the
+        %   list is a cell of dictionaries; built in MATLAB, it is a
+        %   cell of structs or a struct array. Each record is read
+        %   through hdmf.zarr.internal.recordField, so either form is
+        %   accepted. Raises hdmf:InvalidCompoundDtype for a zarr_dtype
+        %   that is not such a list, including the plain "object" of a
+        %   (non-compound) reference dataset.
         %
         %   Capacities are not recorded in zarr_dtype: a decoded layout
         %   reports the field capacities of the array it came from only
@@ -170,6 +172,8 @@ classdef CompoundDtype
 
             if isstruct(value)
                 value = num2cell(value);
+            elseif isa(value, 'dictionary')
+                value = {value};   % a lone record, not a list
             end
             if ~iscell(value) || isempty(value)
                 error("hdmf:InvalidCompoundDtype", ...
@@ -179,13 +183,14 @@ classdef CompoundDtype
             names = strings(1, numel(value));
             types = strings(1, numel(value));
             for i = 1:numel(value)
-                entry = value{i};
-                if ~isstruct(entry) || ~isscalar(entry) || ~isfield(entry, 'name') || ~isfield(entry, 'dtype')
+                [hasName, name] = hdmf.zarr.internal.recordField(value{i}, 'name');
+                [hasType, type] = hdmf.zarr.internal.recordField(value{i}, 'dtype');
+                if ~hasName || ~hasType
                     error("hdmf:InvalidCompoundDtype", ...
                         "Field %d of zarr_dtype is not a {name, dtype} record.", i);
                 end
-                names(i) = string(char(entry.name));
-                types(i) = string(char(entry.dtype));
+                names(i) = string(char(name));
+                types(i) = string(char(type));
             end
             obj = hdmf.zarr.CompoundDtype(names, types);
         end

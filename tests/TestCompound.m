@@ -163,6 +163,17 @@ classdef TestCompound < matlab.unittest.TestCase
                 "hdmf:InvalidCompoundData");
         end
 
+        function writeCompoundAcceptsDictionaryAttributes(tc)
+            % Attributes read from a store arrive as a dictionary, so one
+            % can be handed straight back.
+            f = tc.newStore();
+            attributes = dictionary(string.empty, {});
+            attributes("neurodata_type") = {"DynamicTable"};
+            node = f.writeCompound("table", struct('id', {int32(1)}), Attributes=attributes);
+            tc.verifyEqual(node.attrs{"neurodata_type"}, "DynamicTable");
+            tc.verifyTrue(isKey(node.attrs, "zarr_dtype"));
+        end
+
         % ------------------------------------------------------------------
         % CompoundDtype on its own
 
@@ -175,10 +186,20 @@ classdef TestCompound < matlab.unittest.TestCase
         end
 
         function dtypeDecodesStructArrayForm(tc)
-            % jsondecode returns a struct array when the entries share keys.
+            % A struct array is what a MATLAB caller builds when every
+            % record has the same fields.
             value = struct('name', {'id'; 'name'}, 'dtype', {'int32'; 'str_'});
             dtype = hdmf.zarr.CompoundDtype.decode(value);
             tc.verifyEqual(dtype.Names, ["id", "name"]);
+        end
+
+        function dtypeDecodesDictionaryList(tc)
+            % Read from a store, zarr_dtype is a cell of dictionaries: how
+            % zarr-matlab returns a JSON list of objects.
+            value = {recordDictionary("id", "int32"); recordDictionary("ref", "object")};
+            dtype = hdmf.zarr.CompoundDtype.decode(value);
+            tc.verifyEqual(dtype.Names, ["id", "ref"]);
+            tc.verifyEqual(dtype.isReferenceField(), [false true]);
         end
 
         function dtypeRejectsPlainReferenceDtype(tc)
@@ -231,4 +252,12 @@ classdef TestCompound < matlab.unittest.TestCase
             f = hdmf.zarr.open(store);
         end
     end
+end
+
+function d = recordDictionary(name, type)
+%recordDictionary - A {name, dtype} record in the form a store returns it
+
+d = dictionary(string.empty, {});
+d("name") = {name};
+d("dtype") = {type};
 end

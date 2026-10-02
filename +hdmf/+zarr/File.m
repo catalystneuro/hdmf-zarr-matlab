@@ -274,7 +274,7 @@ classdef File < handle
                 records struct
                 opts.Dtype hdmf.zarr.CompoundDtype {mustBeScalarOrEmpty} = ...
                     hdmf.zarr.CompoundDtype.empty
-                opts.Attributes struct = struct()
+                opts.Attributes {mustBeA(opts.Attributes, ["struct", "dictionary"])} = struct()
             end
             if isempty(records)
                 error("hdmf:InvalidCompoundData", ...
@@ -289,7 +289,11 @@ classdef File < handle
             stored = obj.encodeCompoundRows(records, dtype);
 
             attributes = opts.Attributes;
-            attributes.zarr_dtype = dtype.encodeAttribute();
+            if isa(attributes, 'dictionary')
+                attributes("zarr_dtype") = {dtype.encodeAttribute()};
+            else
+                attributes.zarr_dtype = dtype.encodeAttribute();
+            end
             compoundDataset = zarr.create(obj.store, numel(stored), dtype.encodeDataType(), ...
                 Path=path, Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attributes);
             compoundDataset.write(stored);
@@ -435,9 +439,9 @@ function dtype = compoundDtypeOf(node, records)
 %   read as plain fields: its Zarr types already say what the values
 %   are, and nothing claims any of them is a reference.
 
-attributes = node.attrs;
-if isfield(attributes, 'zarr_dtype')
-    dtype = hdmf.zarr.CompoundDtype.decode(attributes.zarr_dtype);
+[found, fieldTypes] = hdmf.zarr.internal.recordField(node.attrs, 'zarr_dtype');
+if found
+    dtype = hdmf.zarr.CompoundDtype.decode(fieldTypes);
     fieldNames = string(fieldnames(records))';
     if ~isequal(sort(dtype.Names), sort(fieldNames))
         error("hdmf:InvalidCompoundDtype", ...
