@@ -14,9 +14,12 @@ function tf = isReferenceArray(node)
 %
 %   See also hdmf.zarr.Reference, hdmf.zarr.File
 
-tf = isa(node, 'zarr.Array') && node.dtype == "string" && ...
-    isfield(node.attrs, 'zarr_dtype') && isTextScalar(node.attrs.zarr_dtype) && ...
-    string(node.attrs.zarr_dtype) == "object";
+if ~isa(node, 'zarr.Array') || node.dtype ~= "string"
+    tf = false;
+    return
+end
+[found, dtype] = hdmf.zarr.internal.recordField(node.attrs, 'zarr_dtype');
+tf = found && isTextScalar(dtype) && string(dtype) == "object";
 end
 
 function tf = isTextScalar(value)

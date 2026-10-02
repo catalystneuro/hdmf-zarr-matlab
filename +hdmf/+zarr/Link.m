@@ -89,9 +89,11 @@ classdef Link
         %   Raises hdmf:InvalidLink for records without a "name".
 
             arguments
-                value {mustBeA(value, ["struct", "cell", "double"])}
+                value {mustBeA(value, ["struct", "cell", "double", "dictionary"])}
             end
-            if isempty(value)
+            if isa(value, 'dictionary')
+                value = {value};        % a lone record, not a list
+            elseif isempty(value)
                 value = {};
             elseif isstruct(value)
                 value = num2cell(value);
@@ -103,25 +105,26 @@ classdef Link
             links = repmat(hdmf.zarr.Link(), 1, numel(value));
             for i = 1:numel(value)
                 entry = value{i};
-                if ~isstruct(entry) || ~isfield(entry, 'name')
+                [hasName, name] = hdmf.zarr.internal.recordField(entry, 'name');
+                if ~hasName
                     error("hdmf:InvalidLink", "Link record %d has no 'name' field.", i);
                 end
-                links(i) = hdmf.zarr.Link(string(char(entry.name)), ...
+                links(i) = hdmf.zarr.Link(string(char(name)), ...
                     hdmf.zarr.Reference.decode(entry));
             end
         end
 
         function links = fromAttributes(attributes)
-        %fromAttributes - Links declared in a node's attributes struct
+        %fromAttributes - Links declared in a node's attributes
         %   links = fromAttributes(attributes) reads the "zarr_link"
-        %   field of an attributes struct (e.g. group.attrs); returns
-        %   an empty 1x0 array if the node declares no links.
+        %   entry of a node's attributes (e.g. group.attrs, a
+        %   dictionary) and returns an empty 1x0 array if the node
+        %   declares no links. A scalar struct is accepted too, so a
+        %   test can hand it a literal.
 
-            arguments
-                attributes struct
-            end
-            if isfield(attributes, 'zarr_link')
-                links = hdmf.zarr.Link.decode(attributes.zarr_link);
+            [found, entries] = hdmf.zarr.internal.recordField(attributes, 'zarr_link');
+            if found
+                links = hdmf.zarr.Link.decode(entries);
             else
                 links = hdmf.zarr.Link.empty(1, 0);
             end
