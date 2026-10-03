@@ -263,7 +263,9 @@ classdef File < handle
         %   takes the field layout from an hdmf.zarr.CompoundDtype. Use
         %   it when the data alone does not pin the types down -- to
         %   store MATLAB doubles as float32, say, or to declare a
-        %   reference field whose rows are given as paths.
+        %   reference field whose rows are given as paths. The text
+        %   capacities it declares are minimums: a field is widened
+        %   when one of its values needs more room.
         %
         %   writeCompound(obj, path, records, Attributes=attrs) also
         %   sets additional attributes on the new dataset.
@@ -287,6 +289,10 @@ classdef File < handle
                 dtype = opts.Dtype;
             end
             stored = obj.encodeCompoundRows(records, dtype);
+            % Size from the encoded rows rather than from records: a
+            % reference field given as paths occupies the JSON records
+            % those paths became.
+            dtype = dtype.widenToFit(stored);
 
             attributes = opts.Attributes;
             if isa(attributes, 'dictionary')

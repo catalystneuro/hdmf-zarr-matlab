@@ -149,6 +149,42 @@ classdef TestCompound < matlab.unittest.TestCase
             tc.verifyEqual(back(2).label, long);
         end
 
+        function writeCompoundWidensDeclaredCapacityToFit(tc)
+            % A fixed-length field cannot hold a value longer than its
+            % capacity, so a declared capacity is a minimum.
+            f = tc.newStore();
+            long = string(repmat('x', 1, 700));
+            dtype = hdmf.zarr.CompoundDtype("label", "str_");
+            node = f.writeCompound("table", struct('label', {"short"; long}), Dtype=dtype);
+
+            tc.verifyEqual(textFieldChars(node, 1), 700);
+            back = f.readCompound("table");
+            tc.verifyEqual(back(2).label, long);
+        end
+
+        function writeCompoundKeepsDeclaredCapacityThatFits(tc)
+            % Narrower than hdmf-zarr's minimum, but declared and
+            % sufficient, so it is written as declared.
+            f = tc.newStore();
+            dtype = hdmf.zarr.CompoundDtype("label", "str_", StringChars=64);
+            node = f.writeCompound("table", struct('label', {"short"}), Dtype=dtype);
+            tc.verifyEqual(textFieldChars(node, 1), 64);
+        end
+
+        function writeCompoundSizesPathReferencesByEncodedRecord(tc)
+            % A reference given as a path occupies the JSON record it
+            % becomes, which is longer than the path.
+            f = tc.newStore();
+            path = "devices/probe0";
+            dtype = hdmf.zarr.CompoundDtype("device", "object", StringChars=strlength(path));
+            node = f.writeCompound("table", struct('device', {path}), Dtype=dtype);
+
+            encodedRecord = f.makeReference(path).encodeJson();
+            tc.verifyEqual(textFieldChars(node, 1), strlength(encodedRecord));
+            back = f.readCompound("table");
+            tc.verifyEqual(back.device.Path, "/devices/probe0");
+        end
+
         function writeCompoundRejectsUndeclaredField(tc)
             f = tc.newStore();
             records = struct('id', {int32(1)});
@@ -230,6 +266,20 @@ classdef TestCompound < matlab.unittest.TestCase
             tc.verifyGreaterThan(dtype.StringChars, 600);
         end
 
+        function dtypeWidensOnlyFieldsThatNeedRoom(tc)
+            dtype = hdmf.zarr.CompoundDtype(["id", "label", "note"], ...
+                ["int32", "str_", "str_"], StringChars=4);
+            records = struct('id', {int32(1)}, 'label', {"abcdefgh"}, 'note', {"ab"});
+            widened = dtype.widenToFit(records);
+            tc.verifyEqual(widened.StringChars, [4 8 4]);
+        end
+
+        function dtypeWidenRejectsDataWithoutDeclaredField(tc)
+            dtype = hdmf.zarr.CompoundDtype(["id", "label"], ["int32", "str_"]);
+            tc.verifyError(@() dtype.widenToFit(struct('id', {int32(1)})), ...
+                "hdmf:InvalidCompoundData");
+        end
+
         function dtypeRejectsUnsupportedFieldClass(tc)
             records = struct('bad', {{1, 2}});
             tc.verifyError(@() hdmf.zarr.CompoundDtype.fromData(records), ...
@@ -260,4 +310,15 @@ function d = recordDictionary(name, type)
 d = dictionary(string.empty, {});
 d("name") = {name};
 d("dtype") = {type};
+end
+
+function chars = textFieldChars(node, fieldIndex)
+%textFieldChars - Capacity, in characters, a written dataset gives a text field
+%   Read from the dataset's own zarr.json: the array's data_type, not the
+%   layout it was created from, governs what a field can hold.
+
+meta = jsondecode(fileread(fullfile(node.store.root, node.path, "zarr.json")));
+lengthBytes = meta.data_type.configuration.fields(fieldIndex).data_type.configuration.length_bytes;
+bytesPerChar = 4;   % fixed_length_utf32
+chars = lengthBytes / bytesPerChar;
 end

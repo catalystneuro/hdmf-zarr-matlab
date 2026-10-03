@@ -34,10 +34,12 @@ classdef CompoundDtype
 %   capacity, in characters, of each text and reference field. n is
 %   either one value for all such fields or one per field (values for
 %   other fields are ignored). The default, 512, is hdmf-zarr's
-%   minimum; CompoundDtype.fromData widens it to fit the data.
+%   minimum. A capacity is a floor rather than a limit: fromData and
+%   widenToFit raise it wherever the data holds a longer value.
 %
 %   CompoundDtype functions:
 %       isReferenceField - True for each field that holds references
+%       widenToFit       - Widen text capacities to hold the data
 %       encodeAttribute  - On-disk zarr_dtype attribute value
 %       encodeDataType   - On-disk Zarr data_type of the array
 %       decode           - (Static) Layout from a zarr_dtype value
@@ -119,6 +121,37 @@ classdef CompoundDtype
         %   with hdmf.zarr.Reference.decode.
 
             tf = obj.Types == "object";
+        end
+
+        function obj = widenToFit(obj, records)
+        %widenToFit - Widen text and reference capacities to hold the data
+        %   obj = widenToFit(obj, records) returns the layout with
+        %   StringChars raised, where the data needs it, to the longest
+        %   value each text or reference field of the struct array
+        %   records holds. A capacity that already fits is kept, so a
+        %   declared capacity acts as a minimum. Fields are fixed-length
+        %   on disk and cannot store a value longer than their
+        %   capacity, so widen a layout before creating its dataset.
+        %
+        %   A value of class hdmf.zarr.Reference is measured as the
+        %   JSON record it is stored as; any other value as its text.
+        %   Raises hdmf:InvalidCompoundData if records lacks a field
+        %   the layout declares.
+
+            arguments
+                obj (1,1) hdmf.zarr.CompoundDtype
+                records struct
+            end
+            missingFields = setdiff(obj.Names, string(fieldnames(records))');
+            if ~isempty(missingFields)
+                error("hdmf:InvalidCompoundData", ...
+                    "The data has no field '%s', which the compound dtype declares.", ...
+                    missingFields(1));
+            end
+            for k = 1:numel(obj.Names)
+                obj.StringChars(k) = max(obj.StringChars(k), ...
+                    longestText(records, obj.Names(k), obj.Types(k)));
+            end
         end
 
         function value = encodeAttribute(obj)
@@ -276,11 +309,19 @@ end
 end
 
 function chars = capacityFor(records, name, type)
-%CAPACITYFOR Characters to reserve for one field, from the rows it holds.
-%   Reference fields are measured as the JSON records they become, not as
-%   the paths they point at.
+%capacityFor - Characters to reserve for one field, from the rows it holds
+%   The longest value, but never less than hdmf-zarr's minimum.
 
-chars = hdmf.zarr.CompoundDtype.MinStringChars;
+chars = max(hdmf.zarr.CompoundDtype.MinStringChars, longestText(records, name, type));
+end
+
+function chars = longestText(records, name, type)
+%longestText - Characters in the longest value of a text or reference field
+%   0 for a field of any other type, which has no capacity to size. A
+%   value of class hdmf.zarr.Reference is measured as the JSON record it
+%   is stored as, not as the path it points at.
+
+chars = 0;
 if ~ismember(type, ["str_", "str", "text", "utf", "utf8", "utf-8", "isodatetime", "object"])
     return
 end
