@@ -1,64 +1,97 @@
 """Validate a MATLAB-written hdmf-zarr conventions store against the
-documented storage spec, using zarr-python as the reader.
+documented storage spec: its on-disk shape through zarr-python, then its
+meaning through hdmf-zarr's own reader.
 
 Usage: python tools/validate_conventions.py <store_dir>
 """
-import json
 import sys
 
 import zarr
+from hdmf.build import DatasetBuilder, GroupBuilder, ReferenceBuilder
+from hdmf_zarr.backend import ZarrIO
+
+DEVICE = "/general/devices/probe0"
+DATA = "/acquisition/ts/data"
 
 
-def main(root):
+def check_layout(root):
     g = zarr.open_group(zarr.storage.LocalStore(root), mode="r")
 
-    # links: zarr_link must be a LIST of dicts with name/source/path
+    # links: _LINKS must be a LIST of {name, source, path}
     acq = g["acquisition"]
-    links = acq.attrs["zarr_link"]
-    assert isinstance(links, list), f"zarr_link is {type(links)}, not list"
-    link = links[0]
-    assert link["name"] == "device"
-    assert link["source"] == "."
-    assert link["path"] == "/general/devices/probe0"
-    target = g[link["path"].lstrip("/")]
+    assert "zarr_link" not in acq.attrs
+    links = acq.attrs["_LINKS"]
+    assert isinstance(links, list), f"_LINKS is {type(links)}, not list"
+    assert links == [{"source": ".", "path": DEVICE, "name": "device"}], links
+    target = g[links[0]["path"].lstrip("/")]
     assert target.attrs["neurodata_type"] == "Device"
 
-    # reference dataset: string dtype, zarr_dtype attr, JSON elements
+    # reference dataset: string dtype, _DTYPE attr, plain path elements
     refs = g["acquisition"]["ts"]["refs"]
-    assert refs.attrs["zarr_dtype"] == "object"
-    r0 = json.loads(str(refs[0]))
-    assert r0["source"] == "." and r0["path"] == "/general/devices/probe0"
-    assert r0["object_id"] == "dev-oid-1"
-    assert r0["source_object_id"] == "root-oid-1"
+    assert refs.attrs["_DTYPE"] == "object_reference"
+    assert "zarr_dtype" not in refs.attrs
+    assert [str(r) for r in refs[:]] == [DEVICE, DATA]
 
-    # attribute-form reference
+    # attribute-form reference: {"_REFERENCE": {source, path}}
     table = g["acquisition"]["ts"]["data"].attrs["table"]
-    assert table["zarr_dtype"] == "object"
-    assert table["value"]["path"] == "/general/devices/probe0"
+    assert table == {"_REFERENCE": {"source": ".", "path": DEVICE}}, table
 
-    # compound dataset: a "struct" data_type whose zarr_dtype is a LIST of
-    # per-field types, with reference fields typed "object" there while
-    # being stored as ordinary fixed-length text holding JSON records
+    # compound dataset: a "struct" data_type with reference fields listed
+    # in _REFERENCE_FIELDS and stored as fixed-length text holding paths
     compound = g["acquisition"]["ts"]["compound"]
-    field_types = compound.attrs["zarr_dtype"]
-    assert isinstance(field_types, list), f"zarr_dtype is {type(field_types)}, not list"
-    assert [f["name"] for f in field_types] == ["id", "name", "reference"]
-    assert field_types[0]["dtype"] == "int32"
-    assert field_types[2]["dtype"] == "object"
+    assert compound.attrs["_REFERENCE_FIELDS"] == ["reference"]
+    assert "zarr_dtype" not in compound.attrs
     assert compound.dtype.names == ("id", "name", "reference"), compound.dtype
     # hdmf-zarr's minimum text capacity, so rows can be appended later
     assert compound.dtype["reference"].itemsize >= 512 * 4, compound.dtype["reference"]
     rows = compound[:]
     assert rows["id"].tolist() == [1, 2]
     assert list(rows["name"]) == ["probe0", "series"]
-    ref = json.loads(str(rows["reference"][0]))
-    assert ref["source"] == "." and ref["path"] == "/general/devices/probe0"
-    assert ref["object_id"] == "dev-oid-1"
+    assert list(rows["reference"]) == [DEVICE, DATA]
 
     # consolidated metadata still valid after MATLAB writes
     assert g.metadata.consolidated_metadata is not None
+
+
+def target_path(builder):
+    """Absolute path of the builder a reference or link points at."""
+    if isinstance(builder, ReferenceBuilder):
+        builder = builder.builder
+    return builder.path if builder.path.startswith("/") else "/" + builder.path
+
+
+def check_hdmf_zarr_reads(root):
+    with ZarrIO(root, mode="r") as io:
+        top = io.read_builder()
+        ts = top["acquisition"]["ts"]
+
+        link = top["acquisition"].links["device"]
+        assert isinstance(link.builder, GroupBuilder)
+        assert link.builder.attributes["neurodata_type"] == "Device"
+
+        table = ts["data"].attributes["table"]
+        assert isinstance(table, GroupBuilder)
+        assert table.attributes["neurodata_type"] == "Device"
+
+        refs = ts["refs"]
+        assert isinstance(refs, DatasetBuilder)
+        resolved = list(refs.data)
+        assert isinstance(resolved[0], GroupBuilder)
+        assert isinstance(resolved[1], DatasetBuilder)
+
+        compound = ts["compound"]
+        assert [field["name"] for field in compound.dtype] == ["id", "name", "reference"]
+        assert compound.dtype[2]["dtype"] == DatasetBuilder.OBJECT_REF_TYPE
+        rows = list(compound.data)
+        assert isinstance(rows[0][2], GroupBuilder)
+        assert isinstance(rows[1][2], DatasetBuilder)
+
+
+def main(root):
+    check_layout(root)
+    check_hdmf_zarr_reads(root)
     print("conventions validated: links, dataset refs, attribute refs, "
-          "compound datasets, consolidation")
+          "compound datasets, consolidation; read back by hdmf-zarr")
 
 
 if __name__ == "__main__":

@@ -49,9 +49,6 @@ classdef TestCompound < matlab.unittest.TestCase
             tc.verifyEqual([records.name], ["dataset_1", "dataset_2"]);
             tc.verifyEqual(records(1).reference.Path, "/dataset_1");
             tc.verifyEqual(records(2).reference.Path, "/dataset_2");
-            % hdmf-zarr writes JSON null for ids it does not have; those
-            % decode to "" rather than to the text "null".
-            tc.verifyEqual(records(1).reference.ObjectId, "");
         end
 
         function referenceFieldDereferences(tc)
@@ -73,8 +70,8 @@ classdef TestCompound < matlab.unittest.TestCase
         end
 
         function predicatesTellCompoundFromReferenceDataset(tc)
-            % A reference dataset and a compound dataset both carry a
-            % zarr_dtype; only the compound one carries a list of fields.
+            % Both hold references stored as text; only the compound one
+            % has a record data type.
             f = hdmf.zarr.open(tc.fixture);
             compound = f.resolve("ref_compound");
             tc.verifyTrue(hdmf.zarr.isCompoundDataset(compound));
@@ -99,9 +96,6 @@ classdef TestCompound < matlab.unittest.TestCase
             tc.verifyEqual([back.weight], [1.5 -2.25]);
             tc.verifyEqual([back.label], ["alpha", "beta"]);
             tc.verifyEqual(back(2).device.Path, "/devices/probe1");
-            % makeReference fills in the object ids the targets record.
-            tc.verifyEqual(back(1).device.ObjectId, "probe0-oid");
-            tc.verifyEqual(back(1).device.SourceObjectId, "root-oid");
         end
 
         function writeCompoundAcceptsPathsAsReferences(tc)
@@ -123,15 +117,26 @@ classdef TestCompound < matlab.unittest.TestCase
             records = struct('id', {int32(7)}, 'device', {f.makeReference("devices/probe0")});
             node = f.writeCompound("table", records);
 
-            % zarr_dtype is a LIST of {name, dtype} records even for one
-            % field, and reference fields are typed "object" there while
-            % being stored as ordinary fixed-length text.
-            meta = jsondecode(fileread(fullfile(node.store.root, "table", "zarr.json")));
+            % _REFERENCE_FIELDS is a LIST of field names even for one
+            % field, and reference fields are stored as ordinary
+            % fixed-length text holding the target path.
+            txt = fileread(fullfile(node.store.root, "table", "zarr.json"));
+            tc.verifySubstring(txt, '"_REFERENCE_FIELDS":["device"]');
+            tc.verifyFalse(contains(txt, "zarr_dtype"));
+            meta = jsondecode(txt);
             tc.verifyEqual(string(meta.data_type.name), "struct");
-            tc.verifySize(meta.attributes.zarr_dtype, [2 1]);
-            tc.verifyEqual(string(meta.attributes.zarr_dtype(2).dtype), "object");
             tc.verifyEqual(string(meta.data_type.configuration.fields(2).data_type.name), ...
                 "fixed_length_utf32");
+            tc.verifyEqual(node.read().device, "/devices/probe0");
+        end
+
+        function writeCompoundWithoutReferencesOmitsReferenceFields(tc)
+            % as hdmf-zarr writes a compound that holds no references
+            f = tc.newStore();
+            node = f.writeCompound("table", struct('id', {int32(1)}, 'label', {"a"}));
+            tc.verifyFalse(isKey(node.attrs, "_REFERENCE_FIELDS"));
+            [~, dtype] = f.readCompound("table");
+            tc.verifyEqual(dtype.isReferenceField(), [false false]);
         end
 
         function writeCompoundSizesTextToFitWithHeadroom(tc)
@@ -171,16 +176,15 @@ classdef TestCompound < matlab.unittest.TestCase
             tc.verifyEqual(textFieldChars(node, 1), 64);
         end
 
-        function writeCompoundSizesPathReferencesByEncodedRecord(tc)
-            % A reference given as a path occupies the JSON record it
-            % becomes, which is longer than the path.
+        function writeCompoundSizesPathReferencesByStoredPath(tc)
+            % A reference given as a relative path occupies the absolute
+            % path it becomes, which is one character longer.
             f = tc.newStore();
             path = "devices/probe0";
             dtype = hdmf.zarr.CompoundDtype("device", "object", StringChars=strlength(path));
             node = f.writeCompound("table", struct('device', {path}), Dtype=dtype);
 
-            encodedRecord = f.makeReference(path).encodeJson();
-            tc.verifyEqual(textFieldChars(node, 1), strlength(encodedRecord));
+            tc.verifyEqual(textFieldChars(node, 1), strlength("/" + path));
             back = f.readCompound("table");
             tc.verifyEqual(back.device.Path, "/devices/probe0");
         end
@@ -207,7 +211,47 @@ classdef TestCompound < matlab.unittest.TestCase
             attributes("neurodata_type") = {"DynamicTable"};
             node = f.writeCompound("table", struct('id', {int32(1)}), Attributes=attributes);
             tc.verifyEqual(node.attrs{"neurodata_type"}, "DynamicTable");
-            tc.verifyTrue(isKey(node.attrs, "zarr_dtype"));
+        end
+
+        function writeCompoundAddsReferenceFieldsToStructAttributes(tc)
+            f = tc.newStore();
+            records = struct('device', {f.makeReference("devices/probe0")});
+            f.writeCompound("table", records, ...
+                Attributes=struct('neurodata_type', 'DynamicTable'));
+            node = f.resolve("table");
+            tc.verifyEqual(node.attrs{"neurodata_type"}, "DynamicTable");
+            tc.verifyEqual(node.attrs{"_REFERENCE_FIELDS"}, {"device"});
+        end
+
+        function readCompoundRejectsUnknownReferenceField(tc)
+            f = tc.newStore();
+            attributes = dictionary(string.empty, {});
+            attributes("_REFERENCE_FIELDS") = {{'nope'}};
+            f.writeCompound("table", struct('id', {int32(1)}), Attributes=attributes);
+            tc.verifyError(@() f.readCompound("table"), "hdmf:InvalidCompoundDtype");
+        end
+
+        % ------------------------------------------------------------------
+        % Reading what hdmf-zarr wrote before 0.14
+
+        function readsLegacyCompound(tc)
+            % per-field types in a zarr_dtype list, references as JSON text
+            f = tc.newStore();
+            dtype = hdmf.zarr.CompoundDtype(["id", "device"], ["int32", "object"]);
+            legacyTypes = {struct('name', 'id', 'dtype', 'int32'), ...
+                struct('name', 'device', 'dtype', 'object')};
+            node = zarr.create(f.store, 2, dtype.encodeDataType(), Path="legacy", ...
+                Attributes=struct('zarr_dtype', {legacyTypes}));
+            node.write(struct('id', {int32(1); int32(2)}, 'device', ...
+                {"{""source"":""."",""path"":""/devices/probe0"",""object_id"":""p0""}"; ...
+                 "{""source"":""."",""path"":""/devices/probe1""}"}));
+            f.refresh();
+
+            [records, readDtype] = f.readCompound("legacy");
+            tc.verifyEqual(readDtype.Types, ["int32", "object"]);
+            devices = [records.device];
+            tc.verifyEqual([devices.Path], ["/devices/probe0", "/devices/probe1"]);
+            tc.verifyEqual(records(1).device.ObjectId, "p0");
         end
 
         % ------------------------------------------------------------------
@@ -249,21 +293,20 @@ classdef TestCompound < matlab.unittest.TestCase
                 "hdmf:InvalidCompoundDtype");
         end
 
-        function dtypeEncodesAttributeAsList(tc)
-            dtype = hdmf.zarr.CompoundDtype("id", "int32");
-            value = dtype.encodeAttribute();
+        function dtypeEncodesReferenceFieldsAsList(tc)
+            dtype = hdmf.zarr.CompoundDtype(["id", "ref"], ["int32", "object"]);
+            value = dtype.encodeReferenceFields();
             tc.verifyClass(value, 'cell');
-            tc.verifyEqual(string(jsonencode(value)), "[{""name"":""id"",""dtype"":""int32""}]");
+            tc.verifyEqual(string(jsonencode(value)), "[""ref""]");
         end
 
-        function dtypeSizesReferenceFieldsByEncodedRecord(tc)
-            % A reference is measured as the JSON record it becomes, not as
-            % the path it points at.
+        function dtypeSizesReferenceFieldsByPath(tc)
+            % A reference is stored, and measured, as its target path.
             longPath = "/" + string(repmat('d', 1, 600));
             records = struct('ref', {hdmf.zarr.Reference(longPath)});
             dtype = hdmf.zarr.CompoundDtype.fromData(records);
             tc.verifyEqual(dtype.Types, "object");
-            tc.verifyGreaterThan(dtype.StringChars, 600);
+            tc.verifyEqual(dtype.StringChars, 601);
         end
 
         function dtypeWidensOnlyFieldsThatNeedRoom(tc)
@@ -294,11 +337,9 @@ classdef TestCompound < matlab.unittest.TestCase
             import matlab.unittest.fixtures.TemporaryFolderFixture
             tempFixture = tc.applyFixture(TemporaryFolderFixture);
             store = zarr.stores.LocalStore(fullfile(tempFixture.Folder, "store.zarr"));
-            zarr.create_group(store, Attributes=struct('object_id', 'root-oid'));
-            zarr.create_group(store, Path="devices/probe0", ...
-                Attributes=struct('object_id', 'probe0-oid'));
-            zarr.create_group(store, Path="devices/probe1", ...
-                Attributes=struct('object_id', 'probe1-oid'));
+            zarr.create_group(store);
+            zarr.create_group(store, Path="devices/probe0");
+            zarr.create_group(store, Path="devices/probe1");
             f = hdmf.zarr.open(store);
         end
     end

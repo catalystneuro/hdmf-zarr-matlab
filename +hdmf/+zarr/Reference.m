@@ -2,29 +2,33 @@ classdef Reference
 %Reference - An hdmf-zarr store-independent object reference
 %
 %   A Reference is a pointer to a node in a Zarr store: which store
-%   (Source), the node's absolute path (Path), and optionally the
-%   object ids of the target node and of the source store's root. It
-%   is the in-memory form of the {source, path, object_id,
-%   source_object_id} record with which hdmf-zarr emulates HDF5's
-%   references and links.
+%   (Source) and the node's absolute path (Path). It is the in-memory
+%   form of the {source, path} record with which hdmf-zarr emulates
+%   HDF5's references and links.
 %
-%   The same record may appear on disk in three different containers, each 
-%   adding only the wrapping that container needs; decode accepts all three:
+%   hdmf-zarr writes a reference in one of three containers, each with
+%   its own on-disk form:
 %     - Reference datasets (e.g. a DynamicTable column of group
-%       references): each element is the record as a JSON string
-%       (encodeJson), and the array is tagged zarr_dtype:"object"
-%       (isReferenceArray).
-%     - Reference attributes: a single record wrapped as
-%       {"zarr_dtype":"object","value":<record>} (encodeAttribute).
+%       references): each element is the target path as plain text
+%       (encodeElement), and the array carries the attribute
+%       _DTYPE = "object_reference" (isReferenceArray).
+%     - Reference attributes: the record wrapped as
+%       {"_REFERENCE": {source, path}} (encodeAttribute).
 %     - Group links: the record plus a "name" field, listed in the
-%       group's zarr_link attribute -- a named reference that acts as
-%       a child of the group (see hdmf.zarr.Link and hdmf.zarr.resolve).
+%       group's _LINKS attribute -- a named reference that acts as a
+%       child of the group (see hdmf.zarr.Link and hdmf.zarr.resolve).
+%
+%   Stores written by hdmf-zarr before 0.14 use older forms, which
+%   hdmf-zarr still reads and so does decode: dataset elements that are
+%   JSON records, the attribute wrapper {"zarr_dtype": "object",
+%   "value": <record>}, and records that also carry object_id and
+%   source_object_id. Those ids are kept in ObjectId and SourceObjectId
+%   when present, but are never written.
 %
 %   This class only converts records between their in-memory and
 %   on-disk forms; it never touches a store. To open the node a
 %   reference points to, use File.deref (or resolve); to build a
-%   reference with object ids filled in from a store, use
-%   File.makeReference.
+%   reference to a node of a store, use File.makeReference.
 %
 %   ref = Reference() creates the default reference: the root ("/") of
 %   this store ("."). Array growth and decode rely on this default.
@@ -33,31 +37,28 @@ classdef Reference
 %   path within this store. path is normalized to a leading slash
 %   ("a/b", "/a/b/" and "a//b" all become "/a/b").
 %
-%   ref = Reference(path,Source=source,ObjectId=id,SourceObjectId=rootId)
-%   also records the source store and the object ids of the target node
-%   and of the source store's root. hdmf assigns each typed object a
-%   UUID ("object id"); references carry them as an integrity check on
-%   top of the path, but resolution works from the path alone. Unknown
-%   ids ("") are omitted from encoded records.
+%   ref = Reference(path,Source=source) creates a reference to a node
+%   of another store. ObjectId and SourceObjectId may also be given, as
+%   decode does for records that carry them.
 %
 %   Reference functions:
 %       isExternal      - True if the target lives in another store
-%       encode          - On-disk record(s) as struct(s)
-%       encodeJson      - On-disk record(s) as JSON string(s)
+%       encode          - On-disk {source, path} record(s) as struct(s)
+%       encodeElement   - Reference dataset element(s): target paths
 %       encodeAttribute - Attribute form of a scalar reference
 %       decode          - (Static) Parse references from on-disk shapes
 %
 %   Reference properties:
 %       Source         - Store the target lives in ("." is this store)
 %       Path           - Absolute node path within Source
-%       ObjectId       - object_id of the target node
-%       SourceObjectId - object_id of the root of the source store
+%       ObjectId       - object_id of the target, from a legacy record
+%       SourceObjectId - object_id of the source root, from a legacy record
 %
-%   Example: Encode and decode a reference record
-%       ref = hdmf.zarr.Reference("devices/probe0", ObjectId="abc");
-%       ref.encode()      % struct with fields source, path, object_id
-%       ref.encodeJson()  % the same as a JSON string
-%       hdmf.zarr.Reference.decode('{"source":".","path":"/a/b"}')
+%   Example: Encode and decode a reference
+%       ref = hdmf.zarr.Reference("devices/probe0");
+%       ref.encode()          % struct with fields source, path
+%       ref.encodeElement()   % "/devices/probe0"
+%       hdmf.zarr.Reference.decode("/devices/probe0")
 %
 %   See also hdmf.zarr.Link, hdmf.zarr.File, hdmf.zarr.resolve,
 %   hdmf.zarr.isReferenceArray
@@ -74,13 +75,13 @@ classdef Reference
         Path (1,1) string = "/"
 
         %ObjectId - object_id of the target node ("" when not recorded)
-        %   hdmf assigns each typed object a UUID; references carry it
-        %   as an integrity check on top of the path. Optional:
+        %   Records written by hdmf-zarr before 0.14 carry the target's
+        %   object_id; decode keeps it here. It is never written, and
         %   resolution works from the path alone.
         ObjectId (1,1) string = ""
 
         %SourceObjectId - object_id of the source store's root
-        %   "" when not recorded. Optional, like ObjectId.
+        %   "" when not recorded. Read from legacy records, like ObjectId.
         SourceObjectId (1,1) string = ""
     end
 
@@ -122,11 +123,11 @@ classdef Reference
         function s = encode(obj)
         %encode - On-disk record(s) as struct(s), shaped like obj
         %   s = encode(obj) returns each element's on-disk record with
-        %   fields source, path and, when known, object_id and
-        %   source_object_id. Because ids are omitted when unknown,
-        %   records can have different fields; as jsondecode does, the
-        %   result is a struct array when all records share the same
-        %   fields and a cell array of structs otherwise.
+        %   fields source and path. A reference decoded from a record
+        %   without a source has none to write, so the result is a
+        %   struct array when all records share the same fields and,
+        %   as jsondecode returns mixed records, a cell array of structs
+        %   otherwise.
 
             records = cell(size(obj));
             for i = 1:numel(obj)
@@ -141,44 +142,70 @@ classdef Reference
             end
         end
 
-        function txt = encodeJson(obj)
-        %encodeJson - On-disk record(s) as JSON string(s), shaped like obj
-        %   txt = encodeJson(obj) returns each element's record as a
-        %   JSON string, the element format of zarr_dtype:"object"
-        %   datasets.
+        function txt = encodeElement(obj)
+        %encodeElement - Reference dataset element(s), shaped like obj
+        %   txt = encodeElement(obj) returns each reference's target
+        %   path as a string, the element form of a dataset marked
+        %   _DTYPE = "object_reference". A bare path names a node of
+        %   the same store, so this form cannot hold a reference into
+        %   another store: such a reference raises
+        %   hdmf:InvalidReference.
 
+            external = obj.isExternal();
+            if any(external)
+                index = find(external, 1);
+                error("hdmf:InvalidReference", ...
+                    "Reference %d points into store '%s'. A reference dataset can only " + ...
+                    "hold references to nodes of its own store.", index, obj(index).Source);
+            end
             txt = strings(size(obj));
             for i = 1:numel(obj)
-                txt(i) = string(jsonencode(encodeOne(obj(i))));
+                txt(i) = obj(i).Path;
             end
         end
 
-        function s = encodeAttribute(obj)
+        function d = encodeAttribute(obj)
         %encodeAttribute - Attribute form of a scalar reference
-        %   s = encodeAttribute(obj) returns the struct
-        %   {zarr_dtype:"object", value:<record>} stored in node
-        %   attributes. Scalar only: an attribute holds one reference.
+        %   d = encodeAttribute(obj) returns {"_REFERENCE": <record>},
+        %   the value hdmf-zarr stores in a node attribute, as a
+        %   dictionary: "_REFERENCE" is not a valid struct field name.
+        %   Scalar only: an attribute holds one reference.
 
             arguments
                 obj (1,1) hdmf.zarr.Reference
             end
-            s = struct('zarr_dtype', 'object', 'value', encodeOne(obj));
+            d = dictionary(string.empty, {});
+            d(hdmf.zarr.Reference.AttributeKey) = {encodeOne(obj)};
         end
+    end
+
+    properties (Constant, Hidden)
+        %AttributeKey - Key that wraps a reference stored in an attribute
+        AttributeKey = "_REFERENCE"
+
+        %DatasetDtype - _DTYPE value that marks a dataset of references
+        DatasetDtype = "object_reference"
     end
 
     methods (Static)
         function refs = decode(value)
         %decode - Parse reference(s) from any on-disk shape
-        %   refs = decode(value) parses JSON string(s) (string array or
-        %   char), attribute-form records {zarr_dtype, value}, bare
-        %   records, or a cell of either, and returns a Reference array
+        %   refs = decode(value) parses reference dataset elements
+        %   (string array or char), attribute-form records, bare
+        %   records, or a cell of these, and returns a Reference array
         %   shaped like the input -- e.g. decode(node.read()) for a
         %   reference dataset, or decode(group.attrs{"table"}) for a
-        %   reference attribute. A record is a dictionary when it came
-        %   from a store and a scalar struct when it was built in
-        %   MATLAB; both are accepted. Raises hdmf:InvalidReference for
-        %   anything that is not a reference record, naming the
-        %   offending element.
+        %   reference attribute.
+        %
+        %   A text element is a target path in this store, or, in a
+        %   store written by hdmf-zarr before 0.14, a JSON record; text
+        %   starting with "{" is read as the latter. An attribute-form
+        %   record is {"_REFERENCE": <record>}, or the legacy
+        %   {"zarr_dtype": "object", "value": <record>}. A record is a
+        %   dictionary when it came from a store and a scalar struct
+        %   when it was built in MATLAB; both are accepted. Raises
+        %   hdmf:InvalidReference for anything that is not a
+        %   reference, naming the offending element.
 
             arguments
                 value {mustBeA(value, ["string", "char", "struct", "cell", "dictionary"])}
@@ -199,7 +226,7 @@ classdef Reference
                 if iscell(value)
                     refs(i) = hdmf.zarr.Reference.decode(value{i});
                 elseif isstring(value)
-                    refs(i) = decodeOne(parseJsonRecord(value(i), i));
+                    refs(i) = decodeElement(value(i), i);
                 else
                     refs(i) = decodeOne(value(i));
                 end
@@ -208,14 +235,21 @@ classdef Reference
     end
 end
 
-function record = parseJsonRecord(txt, index)
-%parseJsonRecord - jsondecode one element, failing as hdmf:InvalidReference
-%   Empty strings are what unwritten chunks of a string dataset read as, so
-%   they are the common way to hit this; the element index locates them.
+function ref = decodeElement(txt, index)
+%decodeElement - Reference from one text element of a reference dataset
+%   hdmf-zarr writes the target path as plain text; before 0.14 it wrote a
+%   JSON record. A node path never starts with "{", and a JSON record
+%   always does, so that character tells the two apart. Empty strings are
+%   what unwritten chunks of a string dataset read as, so they are the
+%   common way to hit an error here; the element index locates them.
 
-if ismissing(txt) || strlength(txt) == 0
+if ismissing(txt) || strlength(strtrim(txt)) == 0
     error("hdmf:InvalidReference", ...
         "Reference element %d is empty; the dataset may be partially written.", index);
+end
+if ~startsWith(strtrim(txt), "{")
+    ref = hdmf.zarr.Reference(txt);
+    return
 end
 try
     record = jsondecode(char(txt));
@@ -224,24 +258,20 @@ catch cause
         "Reference element %d is not valid JSON: %s", index, txt);
     throw(exception.addCause(cause));
 end
+ref = decodeOne(record);
 end
 
 function s = encodeOne(ref)
 %encodeOne - On-disk record for one reference
-%   Ids (and an empty source) are omitted, not written as null or "",
-%   matching what hdmf-zarr writes and reads.
+%   An empty source is omitted rather than written as "": a record
+%   without a source is what hdmf-zarr reads as pointing into another
+%   file, and "" would not round-trip to that.
 
 s = struct();
 if strlength(ref.Source) > 0
     s.source = char(ref.Source);
 end
 s.path = char(ref.Path);
-if strlength(ref.ObjectId) > 0
-    s.object_id = char(ref.ObjectId);
-end
-if strlength(ref.SourceObjectId) > 0
-    s.source_object_id = char(ref.SourceObjectId);
-end
 end
 
 function ref = decodeOne(s)
@@ -251,13 +281,18 @@ if ~hdmf.zarr.internal.isRecord(s)
     error("hdmf:InvalidReference", ...
         "Expected a reference record (JSON object), got %s.", class(s));
 end
-hasDtype = hdmf.zarr.internal.recordField(s, 'zarr_dtype');
-[hasValue, inner] = hdmf.zarr.internal.recordField(s, 'value');
-if hasDtype && hasValue
-    s = inner;   % attribute form
+[isWrapped, inner] = hdmf.zarr.internal.recordField(s, hdmf.zarr.Reference.AttributeKey);
+if ~isWrapped
+    % Attribute form written by hdmf-zarr before 0.14
+    hasLegacyDtype = hdmf.zarr.internal.recordField(s, 'zarr_dtype');
+    [hasValue, inner] = hdmf.zarr.internal.recordField(s, 'value');
+    isWrapped = hasLegacyDtype && hasValue;
+end
+if isWrapped
+    s = inner;
     if ~hdmf.zarr.internal.isRecord(s)
         error("hdmf:InvalidReference", ...
-            "Attribute value of zarr_dtype 'object' is not a record but %s.", class(s));
+            "Attribute-form reference wraps %s, not a record.", class(s));
     end
 end
 hasPath = hdmf.zarr.internal.recordField(s, 'path');

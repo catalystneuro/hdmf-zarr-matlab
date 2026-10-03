@@ -5,19 +5,23 @@ classdef CompoundDtype
 %   number: a DynamicTable column whose rows each carry an index, a
 %   label and a reference, for instance. "Compound" is hdmf's and
 %   HDF5's name for it; Zarr calls the same thing a structured data
-%   type and writes it as data_type "struct". On top of that,
-%   hdmf-zarr adds a zarr_dtype attribute naming the hdmf type of each
-%   field. A CompoundDtype is the in-memory form of that pair -- the
-%   field names, their hdmf types, and how much room text fields get.
+%   type and writes it as data_type "struct". A CompoundDtype is the
+%   in-memory form of a compound layout -- the field names, their hdmf
+%   types, and how much room text fields get.
 %
-%   Two things make the pair more than a restatement of each other.
-%   Object references have no Zarr type: hdmf-zarr writes each one as
-%   a JSON record (see hdmf.zarr.Reference) into an ordinary
-%   fixed-length text field, and only the zarr_dtype entry "object"
-%   says that a field holds references rather than literal text. And
-%   because those fields are fixed-length, they are sized to the data
-%   with room to spare, so that rows can be appended later without
-%   rewriting the dataset.
+%   Two things make the layout more than a restatement of the Zarr
+%   data_type. Object references have no Zarr type: hdmf-zarr writes
+%   each one as its target path (see hdmf.zarr.Reference) into an
+%   ordinary fixed-length text field, and lists the fields that hold
+%   references rather than literal text in the attribute
+%   _REFERENCE_FIELDS. And because text fields are fixed-length, they
+%   are sized to the data with room to spare, so that rows can be
+%   appended later without rewriting the dataset.
+%
+%   Stores written by hdmf-zarr before 0.14 instead carry a zarr_dtype
+%   attribute: a list of {name, dtype} records naming the hdmf type of
+%   every field, with "object" for reference fields, whose elements
+%   are JSON records rather than paths. decode reads that list.
 %
 %   This class only converts a layout between its in-memory and
 %   on-disk forms; it never touches a store. To read or write a
@@ -38,12 +42,12 @@ classdef CompoundDtype
 %   widenToFit raise it wherever the data holds a longer value.
 %
 %   CompoundDtype functions:
-%       isReferenceField - True for each field that holds references
-%       widenToFit       - Widen text capacities to hold the data
-%       encodeAttribute  - On-disk zarr_dtype attribute value
-%       encodeDataType   - On-disk Zarr data_type of the array
-%       decode           - (Static) Layout from a zarr_dtype value
-%       fromData         - (Static) Layout inferred from a struct array
+%       isReferenceField      - True for each field that holds references
+%       widenToFit            - Widen text capacities to hold the data
+%       encodeReferenceFields - On-disk _REFERENCE_FIELDS attribute value
+%       encodeDataType        - On-disk Zarr data_type of the array
+%       decode                - (Static) Layout from a legacy zarr_dtype value
+%       fromData              - (Static) Layout inferred from a struct array
 %
 %   CompoundDtype properties:
 %       Names       - Field names, in storage order
@@ -116,9 +120,9 @@ classdef CompoundDtype
         function tf = isReferenceField(obj)
         %isReferenceField - True for each field that holds references
         %   tf = isReferenceField(obj) returns a logical row, one entry
-        %   per field, marking the fields whose elements are JSON
-        %   reference records rather than literal text. Decode those
-        %   with hdmf.zarr.Reference.decode.
+        %   per field, marking the fields whose elements are references
+        %   rather than literal text. Decode those with
+        %   hdmf.zarr.Reference.decode.
 
             tf = obj.Types == "object";
         end
@@ -134,7 +138,7 @@ classdef CompoundDtype
         %   capacity, so widen a layout before creating its dataset.
         %
         %   A value of class hdmf.zarr.Reference is measured as the
-        %   JSON record it is stored as; any other value as its text.
+        %   path it is stored as; any other value as its text.
         %   Raises hdmf:InvalidCompoundData if records lacks a field
         %   the layout declares.
 
@@ -154,17 +158,14 @@ classdef CompoundDtype
             end
         end
 
-        function value = encodeAttribute(obj)
-        %encodeAttribute - On-disk zarr_dtype attribute value
-        %   value = encodeAttribute(obj) returns the list of
-        %   {name, dtype} records hdmf-zarr stores in zarr_dtype, as a
-        %   cell array of structs so that it encodes as a JSON list
-        %   even when the dataset has a single field.
+        function value = encodeReferenceFields(obj)
+        %encodeReferenceFields - On-disk _REFERENCE_FIELDS attribute value
+        %   value = encodeReferenceFields(obj) returns the names of the
+        %   fields that hold references, in storage order, as a cell
+        %   array of char so that it encodes as a JSON list even when
+        %   there is a single name.
 
-            value = cell(1, numel(obj.Names));
-            for i = 1:numel(obj.Names)
-                value{i} = struct('name', char(obj.Names(i)), 'dtype', char(obj.Types(i)));
-            end
+            value = cellstr(obj.Names(obj.isReferenceField()));
         end
 
         function dataType = encodeDataType(obj)
@@ -186,9 +187,9 @@ classdef CompoundDtype
 
     methods (Static)
         function obj = decode(value)
-        %decode - Layout from a zarr_dtype attribute value
+        %decode - Layout from a legacy zarr_dtype attribute value
         %   obj = decode(value) parses the list of {name, dtype}
-        %   records hdmf-zarr writes to zarr_dtype, e.g.
+        %   records hdmf-zarr wrote to zarr_dtype before 0.14, e.g.
         %   decode(node.attrs{"zarr_dtype"}). Read from a store, the
         %   list is a cell of dictionaries; built in MATLAB, it is a
         %   cell of structs or a struct array. Each record is read
@@ -266,7 +267,8 @@ end
 function dataType = fieldDataType(type, stringChars)
 %FIELDDATATYPE Zarr data_type of one field of a compound dataset.
 %   Object references have no Zarr type of their own: they travel as
-%   JSON text, so they take the same fixed-length text type as "str_".
+%   their target paths, so they take the same fixed-length text type as
+%   "str_".
 
 switch type
     case {"str_", "str", "text", "utf", "utf8", "utf-8", "isodatetime", "object"}
@@ -318,8 +320,8 @@ end
 function chars = longestText(records, name, type)
 %longestText - Characters in the longest value of a text or reference field
 %   0 for a field of any other type, which has no capacity to size. A
-%   value of class hdmf.zarr.Reference is measured as the JSON record it
-%   is stored as, not as the path it points at.
+%   value of class hdmf.zarr.Reference is measured as the path it is
+%   stored as.
 
 chars = 0;
 if ~ismember(type, ["str_", "str", "text", "utf", "utf8", "utf-8", "isodatetime", "object"])
@@ -328,7 +330,7 @@ end
 for i = 1:numel(records)
     value = records(i).(name);
     if isa(value, 'hdmf.zarr.Reference')
-        value = value.encodeJson();
+        value = value.encodeElement();
     end
     chars = max(chars, max(strlength(string(value)), 0));
 end

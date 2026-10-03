@@ -2,10 +2,12 @@ classdef Link
 %Link - A named reference: how hdmf-zarr represents group links
 %
 %   Zarr groups have no native link concept, so hdmf-zarr lists a
-%   group's links in its "zarr_link" attribute: a JSON list of records,
-%   each an hdmf.zarr.Reference record plus a "name" field. A Link
-%   pairs that Name with its Target reference. Soft links point into
-%   this store; external links name another store (Target.isExternal).
+%   group's links in its "_LINKS" attribute: a JSON list of records,
+%   each an hdmf.zarr.Reference record plus a "name" field. Stores
+%   written by hdmf-zarr before 0.14 use the attribute name "zarr_link"
+%   for the same list; it is read when "_LINKS" is absent. A Link pairs
+%   that Name with its Target reference. Soft links point into this
+%   store; external links name another store (Target.isExternal).
 %
 %   This class only converts links between their in-memory and on-disk
 %   forms. Following a link -- treating Name as a child of the group
@@ -19,8 +21,8 @@ classdef Link
 %   target, an hdmf.zarr.Reference or a path string.
 %
 %   Link functions:
-%       encode         - zarr_link attribute value: one record per link
-%       decode         - (Static) Parse links from a zarr_link value
+%       encode         - _LINKS attribute value: one record per link
+%       decode         - (Static) Parse links from a _LINKS value
 %       fromAttributes - (Static) Links declared in a node's attributes
 %
 %   Link properties:
@@ -29,7 +31,7 @@ classdef Link
 %
 %   Example: Encode and decode a link record
 %       link = hdmf.zarr.Link("device", "general/devices/probe0");
-%       entries = link.encode()          % cell of zarr_link records
+%       entries = link.encode()          % cell of _LINKS records
 %       hdmf.zarr.Link.decode(entries)
 %
 %   See also hdmf.zarr.Reference, hdmf.zarr.resolve, hdmf.zarr.File
@@ -40,6 +42,14 @@ classdef Link
 
         %Target - Where the link points
         Target (1,1) hdmf.zarr.Reference = hdmf.zarr.Reference()
+    end
+
+    properties (Constant, Hidden)
+        %AttributeName - Attribute that lists a group's links
+        AttributeName = "_LINKS"
+
+        %LegacyAttributeName - The same list in stores written before hdmf-zarr 0.14
+        LegacyAttributeName = "zarr_link"
     end
 
     methods
@@ -60,7 +70,7 @@ classdef Link
         end
 
         function entries = encode(obj)
-        %encode - zarr_link attribute value: cell of records, one per link
+        %encode - _LINKS attribute value: cell of records, one per link
         %   entries = encode(obj) returns the on-disk form of the
         %   links: each record is the target's reference record plus
         %   "name". A cell (not a struct array) so that jsonencode
@@ -81,7 +91,7 @@ classdef Link
 
     methods (Static)
         function links = decode(value)
-        %decode - Parse link(s) from a zarr_link attribute value
+        %decode - Parse link(s) from a _LINKS (or zarr_link) attribute value
         %   links = decode(value) parses a struct array or cell of
         %   records, a single record, or empty ([] is what jsondecode
         %   gives for an empty JSON list, which hdmf-zarr writes before
@@ -116,18 +126,45 @@ classdef Link
 
         function links = fromAttributes(attributes)
         %fromAttributes - Links declared in a node's attributes
-        %   links = fromAttributes(attributes) reads the "zarr_link"
-        %   entry of a node's attributes (e.g. group.attrs, a
-        %   dictionary) and returns an empty 1x0 array if the node
+        %   links = fromAttributes(attributes) reads the "_LINKS" entry
+        %   of a node's attributes (e.g. group.attrs, a dictionary), or
+        %   the legacy "zarr_link" entry when there is no "_LINKS", as
+        %   hdmf-zarr does. Returns an empty 1x0 array if the node
         %   declares no links. A scalar struct is accepted too, so a
         %   test can hand it a literal.
 
-            [found, entries] = hdmf.zarr.internal.recordField(attributes, 'zarr_link');
-            if found
+            entries = hdmf.zarr.Link.rawEntries(attributes);
+            if ~isempty(entries)
                 links = hdmf.zarr.Link.decode(entries);
             else
                 links = hdmf.zarr.Link.empty(1, 0);
             end
+        end
+    end
+
+    methods (Static, Hidden)
+        function entries = rawEntries(attributes)
+        %rawEntries - A node's link records as stored, as a 1xN cell
+        %   entries = rawEntries(attributes) returns the records of the
+        %   "_LINKS" attribute, or of "zarr_link" when there is no
+        %   "_LINKS", without decoding them, so that a writer can append
+        %   to them and keep fields this class does not model. Empty
+        %   when the node declares no links.
+
+            [found, entries] = hdmf.zarr.internal.recordField(attributes, ...
+                hdmf.zarr.Link.AttributeName);
+            if ~found
+                [found, entries] = hdmf.zarr.internal.recordField(attributes, ...
+                    hdmf.zarr.Link.LegacyAttributeName);
+            end
+            if ~found || isempty(entries)
+                entries = {};
+            elseif isa(entries, 'dictionary')
+                entries = {entries};   % a lone record, not a list
+            elseif isstruct(entries)
+                entries = num2cell(entries);
+            end
+            entries = reshape(entries, 1, []);
         end
     end
 end
