@@ -1,6 +1,7 @@
 classdef TestConventions < matlab.unittest.TestCase
-    %Reads the hdmf-zarr (PR #325 branch) NWB fixture: links, references
-    %   in attributes and datasets, spec caching, and array data.
+    %Reads the NWB fixture written by hdmf-zarr 0.14: links, references
+    %   in attributes and datasets, scalar datasets, spec caching, and
+    %   array data.
 
     properties
         fixture
@@ -31,7 +32,7 @@ classdef TestConventions < matlab.unittest.TestCase
 
         function resolveFollowsLinks(tc)
             f = hdmf.zarr.open(tc.fixture);
-            % 'device' under shank0 exists only as a zarr_link
+            % 'device' under shank0 exists only as a link
             dev = f.resolve("general/extracellular_ephys/shank0/device");
             tc.verifyEqual(dev.attrs{"neurodata_type"}, "Device");
             tc.verifyTrue(contains(dev.path, "devices/probe0"));
@@ -63,6 +64,13 @@ classdef TestConventions < matlab.unittest.TestCase
                 tc.verifyEqual(groups{i}.attrs{"neurodata_type"}, ...
                     "ElectrodeGroup");
             end
+        end
+
+        function scalarDatasetReads(tc)
+            % hdmf-zarr stores a scalar dataset as a zero-dimensional array
+            f = hdmf.zarr.open(tc.fixture);
+            description = f.resolve("session_description");
+            tc.verifyEqual(description.read(), "hdmf-zarr-matlab conventions fixture");
         end
 
         function arrayDataReads(tc)

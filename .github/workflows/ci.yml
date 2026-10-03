@@ -7,9 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  # Pinned hdmf-zarr zarr-v3-migration commit (PR hdmf-dev/hdmf-zarr#325).
-  # Bump deliberately; the fixture cache keys off it.
-  HDMF_ZARR_SHA: d5de9267cf44c41986ba01a41f94d02956c40fcd
+  # Pinned hdmf-zarr release. Bump deliberately; the fixture cache keys off it.
+  HDMF_ZARR_VERSION: 0.14.0
 
 jobs:
   test:
@@ -25,24 +24,25 @@ jobs:
           repository: catalystneuro/zarr-matlab
           path: zarr-matlab-dep
 
-      # ---- Fixtures: deterministic given (hdmf-zarr SHA, generators) ------
+      # hdmf-zarr generates the fixtures and validates what MATLAB writes.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/workflows/ci.yml
+      - name: Install hdmf-zarr (pinned) + pynwb
+        run: pip install "hdmf-zarr==${HDMF_ZARR_VERSION}" pynwb
+
+      # ---- Fixtures: deterministic given (hdmf-zarr version, generators) --
       - name: Cache hdmf-zarr fixtures
         id: fixcache
         uses: actions/cache@v4
         with:
           path: scratch
-          key: fixture-${{ env.HDMF_ZARR_SHA }}-${{ hashFiles('tools/make_nwb_fixture.py', 'tools/make_compound_fixture.py') }}
-
-      - uses: actions/setup-python@v5
-        if: steps.fixcache.outputs.cache-hit != 'true'
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: .github/workflows/ci.yml
-      - name: Install hdmf-zarr (pinned) + pynwb and generate fixtures
+          key: fixture-${{ env.HDMF_ZARR_VERSION }}-${{ hashFiles('tools/make_nwb_fixture.py', 'tools/make_compound_fixture.py') }}
+      - name: Generate fixtures
         if: steps.fixcache.outputs.cache-hit != 'true'
         run: |
-          pip install "git+https://github.com/hdmf-dev/hdmf-zarr@${HDMF_ZARR_SHA}" pynwb
           python tools/make_nwb_fixture.py scratch/fixture.nwb.zarr
           python tools/make_compound_fixture.py scratch/fixture.compound.zarr
 
@@ -92,7 +92,5 @@ jobs:
             addpath(pwd, fullfile(pwd, 'tools'), fullfile(pwd, 'zarr-matlab-dep'));
             make_write_fixture('write_fixture.zarr')
 
-      - name: Validate MATLAB-written conventions with zarr-python
-        run: |
-          pip install "zarr>=3.3" >/dev/null 2>&1 || pip install "zarr>=3.3"
-          python tools/validate_conventions.py write_fixture.zarr
+      - name: Validate MATLAB-written conventions with hdmf-zarr
+        run: python tools/validate_conventions.py write_fixture.zarr

@@ -19,12 +19,12 @@ classdef File < handle
 %       deref         - Resolve a reference to its node
 %       derefAll      - Dereference a whole reference dataset
 %       readCompound  - Read a compound dataset, references decoded
-%       links         - zarr_link entries of a group, as a Link array
+%       links         - Links a group declares, as a Link array
 %       addLink       - Add a soft link to a group
 %       writeRefs     - Create a reference dataset
 %       writeCompound - Create a compound dataset
 %       setRefAttr    - Store an object reference in an attribute
-%       makeReference - Reference to a node, with object ids filled in
+%       makeReference - Reference to a node of this store
 %       refresh       - Re-read the root after mutations
 %       specLoc       - Path of the cached specifications group
 %
@@ -73,9 +73,10 @@ classdef File < handle
         end
 
         function linkList = links(obj, groupOrPath)
-        %links - zarr_link entries of a group, as a Link array
+        %links - Links a group declares, as a Link array
         %   linkList = links(obj, groupOrPath) returns the links
-        %   declared by a group (a zarr.Group or a path to one) as an
+        %   declared by a group (a zarr.Group or a path to one) in its
+        %   _LINKS attribute, or the legacy zarr_link, as an
         %   hdmf.zarr.Link array; 1x0 if the group declares none.
 
             group = obj.asNode(groupOrPath);
@@ -86,8 +87,8 @@ classdef File < handle
         %deref - Resolve a reference to its node
         %   node = deref(obj, ref) opens the node ref points to. ref
         %   may be an hdmf.zarr.Reference or any on-disk form accepted
-        %   by hdmf.zarr.Reference.decode (JSON string, attribute-form
-        %   struct, bare record).
+        %   by hdmf.zarr.Reference.decode (dataset element, attribute-form
+        %   record, bare record).
 
             arguments
                 obj
@@ -141,9 +142,9 @@ classdef File < handle
         %   dataset at target (a path or a zarr.Array) and returns its
         %   rows as a struct array with one field per record field.
         %   Fields that hold object references come back as
-        %   hdmf.zarr.Reference arrays rather than as the JSON text
-        %   they are stored as; every other field keeps the class its
-        %   Zarr type gives it. Convert the result with struct2table
+        %   hdmf.zarr.Reference arrays rather than as the text they are
+        %   stored as; every other field keeps the class its Zarr type
+        %   gives it. Convert the result with struct2table
         %   if a table suits the caller better.
         %
         %   [records, dtype] = readCompound(obj, target) also returns
@@ -174,11 +175,15 @@ classdef File < handle
         % Write side: create links and references per the conventions.
 
         function addLink(obj, groupPath, name, target)
-        %addLink - Add a soft link: group's zarr_link gains an entry
+        %addLink - Add a soft link: group's _LINKS gains an entry
         %   addLink(obj, groupPath, name, target) makes target (a path
         %   or node in this store) appear as the child name of the
         %   group at groupPath, e.g.
         %   addLink(f, "analysis", "device", "general/devices/probe0")
+        %
+        %   A group that lists its links under the legacy zarr_link
+        %   name has them copied into _LINKS along with the new one:
+        %   readers take _LINKS alone when it is present.
 
             arguments
                 obj
@@ -193,28 +198,17 @@ classdef File < handle
             % Append to the raw list rather than decoding and re-encoding the
             % existing entries, so records written by other tools keep any
             % fields this library does not model.
-            attributes = group.attrs;
-            existing = {};
-            [found, entries] = hdmf.zarr.internal.recordField(attributes, 'zarr_link');
-            if found && ~isempty(entries)
-                existing = entries;
-                if isa(existing, 'dictionary')
-                    existing = {existing};   % a lone record, not a list
-                elseif isstruct(existing)
-                    existing = num2cell(existing);
-                end
-                existing = reshape(existing, 1, []);
-            end
+            existing = hdmf.zarr.Link.rawEntries(group.attrs);
             newLink = hdmf.zarr.Link(name, obj.makeReference(target));
-            group.setAttr('zarr_link', [existing, newLink.encode()]);
+            group.setAttr(hdmf.zarr.Link.AttributeName, [existing, newLink.encode()]);
             obj.refresh();
         end
 
         function refDataset = writeRefs(obj, path, targets, opts)
-        %writeRefs - Create a reference dataset (zarr_dtype:"object")
+        %writeRefs - Create a reference dataset (_DTYPE "object_reference")
         %   refDataset = writeRefs(obj, path, targets) writes a
-        %   string-dtype array at path with one JSON reference record
-        %   per element of targets (paths or nodes), e.g.
+        %   string-dtype array at path holding the path of each element
+        %   of targets (paths or nodes in this store), e.g.
         %   writeRefs(f, "table/col", ["a/b", "a/c"])
         %
         %   refDataset = writeRefs(obj, path, targets, Attributes=attrs)
@@ -234,15 +228,11 @@ classdef File < handle
             for i = 1:numTargets
                 refs(i) = obj.makeReference(targets{i});
             end
-            attributes = opts.Attributes;
-            if isa(attributes, 'dictionary')
-                attributes("zarr_dtype") = {'object'};
-            else
-                attributes.zarr_dtype = 'object';
-            end
+            attributes = withAttribute(opts.Attributes, "_DTYPE", ...
+                hdmf.zarr.Reference.DatasetDtype);
             refDataset = zarr.create(obj.store, numTargets, "string", Path=path, ...
                 Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attributes);
-            refDataset(:) = refs.encodeJson();
+            refDataset(:) = refs.encodeElement();
             obj.refresh();
         end
 
@@ -290,15 +280,16 @@ classdef File < handle
             end
             stored = obj.encodeCompoundRows(records, dtype);
             % Size from the encoded rows rather than from records: a
-            % reference field given as paths occupies the JSON records
-            % those paths became.
+            % reference field given as relative paths or nodes occupies
+            % the absolute paths they became.
             dtype = dtype.widenToFit(stored);
 
             attributes = opts.Attributes;
-            if isa(attributes, 'dictionary')
-                attributes("zarr_dtype") = {dtype.encodeAttribute()};
-            else
-                attributes.zarr_dtype = dtype.encodeAttribute();
+            if any(dtype.isReferenceField())
+                % hdmf-zarr writes this attribute only for a compound that
+                % has reference fields.
+                attributes = withAttribute(attributes, "_REFERENCE_FIELDS", ...
+                    dtype.encodeReferenceFields());
             end
             compoundDataset = zarr.create(obj.store, numel(stored), dtype.encodeDataType(), ...
                 Path=path, Codecs={zarr.codecs.ZlibCodec(3)}, Attributes=attributes);
@@ -311,7 +302,7 @@ classdef File < handle
         %   setRefAttr(obj, nodePath, attrName, target) sets the
         %   attribute attrName of the node at nodePath to a reference
         %   to target (a path or node), in the
-        %   {"zarr_dtype":"object","value":<record>} form.
+        %   {"_REFERENCE": {source, path}} form.
 
             arguments
                 obj
@@ -320,27 +311,18 @@ classdef File < handle
                 target
             end
             node = obj.resolve(nodePath);
-            node.setAttr(char(attrName), obj.makeReference(target).encodeAttribute());
+            node.setAttr(attrName, obj.makeReference(target).encodeAttribute());
             obj.refresh();
         end
 
         function ref = makeReference(obj, target)
-        %makeReference - Reference to a node, with object ids filled in
+        %makeReference - Reference to a node of this store
         %   ref = makeReference(obj, target) builds an
-        %   hdmf.zarr.Reference to target (a path or node); the object
-        %   ids of the target and of this store's root are filled in
-        %   when those nodes record one.
+        %   hdmf.zarr.Reference to target (a path or node). A path is
+        %   resolved to its node first, which checks that it exists.
 
             node = obj.asNode(target);
             ref = hdmf.zarr.Reference(node.path);
-            [hasId, objectId] = hdmf.zarr.internal.recordField(node.attrs, 'object_id');
-            if hasId
-                ref.ObjectId = string(char(objectId));
-            end
-            [hasRootId, rootId] = hdmf.zarr.internal.recordField(obj.root.attrs, 'object_id');
-            if hasRootId
-                ref.SourceObjectId = string(char(rootId));
-            end
         end
 
         function refresh(obj)
@@ -396,7 +378,7 @@ classdef File < handle
 
         function stored = encodeCompoundRows(obj, records, dtype)
         %encodeCompoundRows - Rows in the form the Zarr record type takes
-        %   Reference fields become their JSON records and text fields
+        %   Reference fields become their target paths and text fields
         %   string scalars, so that every field is a value the array's
         %   own data type can encode.
 
@@ -416,7 +398,7 @@ classdef File < handle
                         if ~isa(value, 'hdmf.zarr.Reference')
                             value = obj.makeReference(value);
                         end
-                        stored(i, 1).(name) = value.encodeJson();
+                        stored(i, 1).(name) = value.encodeElement();
                     elseif isstring(value) || ischar(value)
                         stored(i, 1).(name) = string(value);
                     else
@@ -440,15 +422,30 @@ end
 
 function dtype = compoundDtypeOf(node, records)
 %compoundDtypeOf - Field layout of a compound dataset that has been read
-%   zarr_dtype is what marks a field as holding object references, so a
-%   dataset written without it (by something other than hdmf-zarr) is
-%   read as plain fields: its Zarr types already say what the values
-%   are, and nothing claims any of them is a reference.
+%   The Zarr record type gives every field's type, but a reference field
+%   is stored as text, so only an attribute can say which fields hold
+%   references: _REFERENCE_FIELDS, or, in a store written by hdmf-zarr
+%   before 0.14, the per-field types of zarr_dtype. A dataset with
+%   neither is read as plain fields: nothing claims any of them is a
+%   reference.
 
+fieldNames = string(fieldnames(records))';
+[found, referenceFields] = hdmf.zarr.internal.recordField(node.attrs, "_REFERENCE_FIELDS");
+if found
+    dtype = hdmf.zarr.CompoundDtype.fromData(records);
+    referenceFields = reshape(string(referenceFields), 1, []);
+    unknownFields = setdiff(referenceFields, fieldNames);
+    if ~isempty(unknownFields)
+        error("hdmf:InvalidCompoundDtype", ...
+            "_REFERENCE_FIELDS of '%s' names field '%s', but the record type has %s.", ...
+            node.path, unknownFields(1), strjoin(fieldNames, ", "));
+    end
+    dtype.Types(ismember(dtype.Names, referenceFields)) = "object";
+    return
+end
 [found, fieldTypes] = hdmf.zarr.internal.recordField(node.attrs, 'zarr_dtype');
 if found
     dtype = hdmf.zarr.CompoundDtype.decode(fieldTypes);
-    fieldNames = string(fieldnames(records))';
     if ~isequal(sort(dtype.Names), sort(fieldNames))
         error("hdmf:InvalidCompoundDtype", ...
             "zarr_dtype of '%s' names fields %s, but the record type has %s.", ...
@@ -457,4 +454,21 @@ if found
     return
 end
 dtype = hdmf.zarr.CompoundDtype.fromData(records);
+end
+
+function attributes = withAttribute(attributes, name, value)
+%withAttribute - Attributes with one entry added, as a dictionary
+%   The reserved hdmf-zarr attribute names start with an underscore, which
+%   a struct field cannot, so a struct of attributes is carried over into
+%   a dictionary first.
+
+if isstruct(attributes)
+    names = string(fieldnames(attributes));
+    contents = struct2cell(attributes);
+    attributes = dictionary(string.empty, {});
+    for i = 1:numel(names)
+        attributes(names(i)) = contents(i);
+    end
+end
+attributes(name) = {value};
 end

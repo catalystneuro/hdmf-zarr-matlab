@@ -6,7 +6,7 @@ function node = resolve(root, target)
 %   hdmf.zarr.Reference.
 %
 %   Each path segment may be a real child of the current group or the
-%   name of one of that group's zarr_link entries -- links are
+%   name of one of that group's links (see hdmf.zarr.Link) -- links are
 %   followed transparently, so a linked node can be addressed as if it
 %   were an ordinary child. A link restarts resolution at its target
 %   path from root. Only in-store targets are supported: external

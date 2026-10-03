@@ -1,6 +1,7 @@
 """Generate an NWB-Zarr (v3) fixture exercising the hdmf-zarr conventions:
-links (zarr_link), object references in attributes and datasets
-(zarr_dtype: object), and cached specifications (.specloc).
+links (_LINKS), object references in attributes ({"_REFERENCE": ...}) and
+datasets (_DTYPE: object_reference), scalar datasets, and cached
+specifications (.specloc).
 
 Usage: python tools/make_nwb_fixture.py <out_dir>
 """

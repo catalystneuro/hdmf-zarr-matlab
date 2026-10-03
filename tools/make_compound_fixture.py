@@ -1,7 +1,7 @@
 """Generate an hdmf-zarr (Zarr v3) fixture of compound datasets: a plain
 compound dataset and one whose rows carry object references, written the
-way hdmf-zarr writes them (a "struct" data_type plus a zarr_dtype list of
-per-field types, references JSON-serialized into fixed-length text fields).
+way hdmf-zarr writes them (a "struct" data_type, references stored as target
+paths in fixed-length text fields and listed in _REFERENCE_FIELDS).
 
 Built from hdmf builders rather than pynwb, so the fixture stays small and
 its field types are stated outright instead of following from a schema.
