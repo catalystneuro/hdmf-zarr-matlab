@@ -347,12 +347,7 @@ classdef File < handle
         %   ".specloc" attribute, which names the group holding cached
         %   format specifications ("" when the store records none).
 
-            [found, value] = hdmf.zarr.internal.recordField(obj.root.attrs, ".specloc");
-            if found
-                specPath = string(char(value));
-            else
-                specPath = "";
-            end
+            specPath = hdmf.zarr.specLoc(obj.root);
         end
     end
 

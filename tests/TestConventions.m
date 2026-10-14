@@ -89,5 +89,30 @@ classdef TestConventions < matlab.unittest.TestCase
             [~, gn] = spec.children();
             tc.verifyTrue(ismember("core", gn));
         end
+
+        function specLocReadsRootGroup(tc)
+            f = hdmf.zarr.open(tc.fixture);
+            tc.verifyEqual(hdmf.zarr.specLoc(f.root), f.specLoc());
+            tc.verifyNotEqual(hdmf.zarr.specLoc(f.root), "");
+        end
+
+        function reservedAttributeNamesLeaveDataAttributes(tc)
+            % The root carries .specloc, a linking group _LINKS and a
+            % reference dataset _DTYPE and _ARRAY_DIMENSIONS; none of them
+            % is data.
+            f = hdmf.zarr.open(tc.fixture);
+            reserved = hdmf.zarr.reservedAttributeNames();
+            nodes = {f.root, f.resolve("general/extracellular_ephys/shank0"), ...
+                f.resolve("general/extracellular_ephys/electrodes/group")};
+            conventionNames = [".specloc", "_LINKS", "_DTYPE"];
+            for i = 1:numel(nodes)
+                names = keys(nodes{i}.attrs);
+                tc.verifyTrue(ismember(conventionNames(i), names));
+                dataNames = names(~ismember(names, reserved));
+                tc.verifyFalse(any(startsWith(dataNames, ["_", "."])));
+            end
+            tc.verifyTrue(ismember("neurodata_type", keys(f.root.attrs)));
+            tc.verifyFalse(ismember("neurodata_type", reserved));
+        end
     end
 end
