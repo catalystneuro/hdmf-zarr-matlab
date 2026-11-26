@@ -97,9 +97,9 @@ classdef TestConventions < matlab.unittest.TestCase
         end
 
         function reservedAttributeNamesLeaveDataAttributes(tc)
-            % The root carries .specloc, a linking group _LINKS and a
-            % reference dataset _DTYPE and _ARRAY_DIMENSIONS; none of them
-            % is data.
+            % The root carries .specloc, the shank group carries _LINKS, and
+            % the electrodes group column carries _DTYPE and
+            % _ARRAY_DIMENSIONS; none of them is data.
             f = hdmf.zarr.open(tc.fixture);
             reserved = hdmf.zarr.reservedAttributeNames();
             nodes = {f.root, f.resolve("general/extracellular_ephys/shank0"), ...

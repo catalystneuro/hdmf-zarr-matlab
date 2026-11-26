@@ -12,7 +12,9 @@ function names = referenceFields(node)
 %   hdmf.zarr.Reference.decode decodes.
 %
 %   Raises hdmf:InvalidCompoundDtype for a compound dataset whose
-%   zarr_dtype is not a list of {name, dtype} field records.
+%   zarr_dtype is not a list of {name, dtype} field records. The names
+%   are not checked against the fields of the array's record type;
+%   hdmf.zarr.File.readCompound checks them.
 %
 %   See also hdmf.zarr.isCompoundDataset, hdmf.zarr.CompoundDtype,
 %   hdmf.zarr.File.readCompound
