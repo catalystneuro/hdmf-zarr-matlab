@@ -7,6 +7,10 @@ function specPath = specLoc(rootGroup)
 %
 %   See also hdmf.zarr.File.specLoc
 
+arguments
+    rootGroup (1,1) zarr.Group
+end
+
 [found, value] = hdmf.zarr.internal.recordField(rootGroup.attrs, ".specloc");
 if found
     specPath = string(char(value));
