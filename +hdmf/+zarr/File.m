@@ -162,8 +162,8 @@ classdef File < handle
             end
             records = node.read();
             dtype = compoundDtypeOf(node, records);
-            referenceFields = dtype.Names(dtype.isReferenceField());
-            for name = referenceFields
+            referenceNames = dtype.Names(dtype.isReferenceField());
+            for name = referenceNames
                 values = hdmf.zarr.Reference.decode([records.(name)]);
                 for i = 1:numel(records)
                     records(i).(name) = values(i);
