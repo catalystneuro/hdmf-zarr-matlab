@@ -78,6 +78,13 @@ classdef TestCompound < matlab.unittest.TestCase
             tc.verifyFalse(hdmf.zarr.isReferenceArray(compound));
         end
 
+        function referenceFieldsNamesFieldsHoldingReferences(tc)
+            f = hdmf.zarr.open(tc.fixture);
+            tc.verifyEqual(hdmf.zarr.referenceFields(f.resolve("ref_compound")), "reference");
+            tc.verifyEqual(hdmf.zarr.referenceFields(f.resolve("plain_compound")), strings(1, 0));
+            tc.verifyEqual(hdmf.zarr.referenceFields(f.resolve("dataset_1")), strings(1, 0));
+        end
+
         % ------------------------------------------------------------------
         % Writing, and reading back what we wrote
 
@@ -252,6 +259,17 @@ classdef TestCompound < matlab.unittest.TestCase
             devices = [records.device];
             tc.verifyEqual([devices.Path], ["/devices/probe0", "/devices/probe1"]);
             tc.verifyEqual(records(1).device.ObjectId, "p0");
+        end
+
+        function referenceFieldsReadsLegacyFieldTypes(tc)
+            f = tc.newStore();
+            dtype = hdmf.zarr.CompoundDtype(["id", "device"], ["int32", "object"]);
+            legacyTypes = {struct('name', 'id', 'dtype', 'int32'), ...
+                struct('name', 'device', 'dtype', 'object')};
+            node = zarr.create(f.store, 2, dtype.encodeDataType(), Path="legacy", ...
+                Attributes=struct('zarr_dtype', {legacyTypes}));
+
+            tc.verifyEqual(hdmf.zarr.referenceFields(node), "device");
         end
 
         % ------------------------------------------------------------------

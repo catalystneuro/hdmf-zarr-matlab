@@ -36,6 +36,11 @@ backend) and [matzarr](https://github.com/catalystneuro/matzarr)'s translated
   `ElectricalSeries` with links, attribute refs, dataset refs, scalar
   datasets and zstd-compressed data; compound datasets with reference
   fields).
+- **Conventions without `File`**: `hdmf.zarr.specLoc(rootGroup)`,
+  `hdmf.zarr.referenceFields(node)` and `hdmf.zarr.reservedAttributeNames()`
+  read `.specloc`, name the reference fields of a compound dataset, and list
+  the attribute names that carry conventions rather than data, for a reader
+  that walks a store with its own node model.
 - **Write**: `addLink()` / `writeRefs()` / `setRefAttr()` /
   `writeCompound()` produce spec-shaped conventions (single links as JSON
   lists, consolidated metadata refreshed) — validated in CI field by field

@@ -162,8 +162,8 @@ classdef File < handle
             end
             records = node.read();
             dtype = compoundDtypeOf(node, records);
-            referenceFields = dtype.Names(dtype.isReferenceField());
-            for name = referenceFields
+            referenceNames = dtype.Names(dtype.isReferenceField());
+            for name = referenceNames
                 values = hdmf.zarr.Reference.decode([records.(name)]);
                 for i = 1:numel(records)
                     records(i).(name) = values(i);
@@ -347,12 +347,7 @@ classdef File < handle
         %   ".specloc" attribute, which names the group holding cached
         %   format specifications ("" when the store records none).
 
-            [found, value] = hdmf.zarr.internal.recordField(obj.root.attrs, ".specloc");
-            if found
-                specPath = string(char(value));
-            else
-                specPath = "";
-            end
+            specPath = hdmf.zarr.specLoc(obj.root);
         end
     end
 
@@ -430,17 +425,17 @@ function dtype = compoundDtypeOf(node, records)
 %   reference.
 
 fieldNames = string(fieldnames(records))';
-[found, referenceFields] = hdmf.zarr.internal.recordField(node.attrs, "_REFERENCE_FIELDS");
-if found
+hasReferenceFields = hdmf.zarr.internal.recordField(node.attrs, "_REFERENCE_FIELDS");
+if hasReferenceFields
     dtype = hdmf.zarr.CompoundDtype.fromData(records);
-    referenceFields = reshape(string(referenceFields), 1, []);
-    unknownFields = setdiff(referenceFields, fieldNames);
+    referenceNames = hdmf.zarr.referenceFields(node);
+    unknownFields = setdiff(referenceNames, fieldNames);
     if ~isempty(unknownFields)
         error("hdmf:InvalidCompoundDtype", ...
             "_REFERENCE_FIELDS of '%s' names field '%s', but the record type has %s.", ...
             node.path, unknownFields(1), strjoin(fieldNames, ", "));
     end
-    dtype.Types(ismember(dtype.Names, referenceFields)) = "object";
+    dtype.Types(ismember(dtype.Names, referenceNames)) = "object";
     return
 end
 [found, fieldTypes] = hdmf.zarr.internal.recordField(node.attrs, 'zarr_dtype');
