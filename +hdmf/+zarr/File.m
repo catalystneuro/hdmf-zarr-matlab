@@ -425,17 +425,17 @@ function dtype = compoundDtypeOf(node, records)
 %   reference.
 
 fieldNames = string(fieldnames(records))';
-[found, referenceFields] = hdmf.zarr.internal.recordField(node.attrs, "_REFERENCE_FIELDS");
-if found
+hasReferenceFields = hdmf.zarr.internal.recordField(node.attrs, "_REFERENCE_FIELDS");
+if hasReferenceFields
     dtype = hdmf.zarr.CompoundDtype.fromData(records);
-    referenceFields = reshape(string(referenceFields), 1, []);
-    unknownFields = setdiff(referenceFields, fieldNames);
+    referenceNames = hdmf.zarr.referenceFields(node);
+    unknownFields = setdiff(referenceNames, fieldNames);
     if ~isempty(unknownFields)
         error("hdmf:InvalidCompoundDtype", ...
             "_REFERENCE_FIELDS of '%s' names field '%s', but the record type has %s.", ...
             node.path, unknownFields(1), strjoin(fieldNames, ", "));
     end
-    dtype.Types(ismember(dtype.Names, referenceFields)) = "object";
+    dtype.Types(ismember(dtype.Names, referenceNames)) = "object";
     return
 end
 [found, fieldTypes] = hdmf.zarr.internal.recordField(node.attrs, 'zarr_dtype');
