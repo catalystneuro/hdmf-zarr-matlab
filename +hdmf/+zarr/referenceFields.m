@@ -11,6 +11,9 @@ function names = referenceFields(node)
 %   The values of those fields are reference elements that
 %   hdmf.zarr.Reference.decode decodes.
 %
+%   Raises hdmf:InvalidCompoundDtype for a compound dataset whose
+%   zarr_dtype is not a list of {name, dtype} field records.
+%
 %   See also hdmf.zarr.isCompoundDataset, hdmf.zarr.CompoundDtype,
 %   hdmf.zarr.File.readCompound
 
@@ -23,7 +26,7 @@ if found
     names = reshape(string(value), 1, []);
     return
 end
-[found, fieldTypes] = hdmf.zarr.internal.recordField(node.attrs, 'zarr_dtype');
+[found, fieldTypes] = hdmf.zarr.internal.recordField(node.attrs, "zarr_dtype");
 if found
     dtype = hdmf.zarr.CompoundDtype.decode(fieldTypes);
     names = dtype.Names(dtype.isReferenceField());
