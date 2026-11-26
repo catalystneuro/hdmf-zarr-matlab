@@ -111,6 +111,7 @@ classdef TestConventions < matlab.unittest.TestCase
                 dataNames = names(~ismember(names, reserved));
                 tc.verifyFalse(any(startsWith(dataNames, ["_", "."])));
             end
+            tc.verifyTrue(ismember("_ARRAY_DIMENSIONS", keys(nodes{3}.attrs)));
             tc.verifyTrue(ismember("neurodata_type", keys(f.root.attrs)));
             tc.verifyFalse(ismember("neurodata_type", reserved));
         end
